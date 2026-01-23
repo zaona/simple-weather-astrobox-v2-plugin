@@ -1,10 +1,6 @@
 use wit_bindgen::FutureReader;
-use serde_json::Value;
 
-use crate::exports::astrobox::psys_plugin::{
-    event::{self, EventType},
-    lifecycle,
-};
+use crate::exports::astrobox::psys_plugin::{event, lifecycle};
 
 pub mod logger;
 pub mod ui;
@@ -15,44 +11,19 @@ wit_bindgen::generate!({
     generate_all,
 });
 
-fn extract_payload_text(payload: &str) -> String {
-    if let Ok(json) = serde_json::from_str::<Value>(payload) {
-        if let Some(text) = json.get("payloadText").and_then(|v| v.as_str()) {
-            return text.to_string();
-        }
-        if let Some(payload_value) = json.get("payload") {
-            if let Some(text) = payload_value.as_str() {
-                return text.to_string();
-            }
-            return payload_value.to_string();
-        }
-    }
-    payload.to_string()
-}
-
 struct MyPlugin;
 
 impl event::Guest for MyPlugin {
     #[allow(async_fn_in_trait)]
-    fn on_event(event_type: EventType, event_payload: _rt::String) -> FutureReader<String> {
+    fn on_event(event_type: event::EventType, event_payload: _rt::String) -> FutureReader<String> {
         let (writer, reader) = wit_future::new::<String>(|| "".to_string());
 
         match event_type {
-            EventType::PluginMessage => {}
-            EventType::InterconnectMessage => {
+            event::EventType::InterconnectMessage => {
                 ui::handle_interconnect_message(&event_payload);
             }
-            EventType::DeviceAction => {}
-            EventType::ProviderAction => {}
-            EventType::DeeplinkAction => {}
-            EventType::TransportPacket => {}
-            EventType::Timer => {
-                let payload = extract_payload_text(&event_payload);
-                if payload == "hide_message" {
-                    ui::hide_message();
-                }
-            }
-        };
+            _ => {}
+        }
 
         tracing::info!("event_type: {:?}, event_payload: {}", event_type, event_payload);
 
@@ -91,11 +62,8 @@ impl event::Guest for MyPlugin {
         reader
     }
 
-    fn on_card_render(card_id: _rt::String) -> wit_bindgen::rt::async_support::FutureReader<()> {
+    fn on_card_render(_card_id: _rt::String) -> wit_bindgen::rt::async_support::FutureReader<()> {
         let (writer, reader) = wit_future::new::<()>(|| ());
-
-        // 这里可以实现卡片渲染逻辑
-        tracing::info!("Card render requested for: {}", card_id);
 
         wit_bindgen::spawn(async move {
             let _ = writer.write(()).await;
@@ -109,7 +77,21 @@ impl lifecycle::Guest for MyPlugin {
     #[allow(async_fn_in_trait)]
     fn on_load() -> () {
         logger::init();
-        tracing::info!("Hello AstroBox V2 Plugin!");
+        tracing::info!("Simple Interconnect Plugin Loaded!");
+
+        wit_bindgen::spawn(async {
+            let devices = crate::astrobox::psys_host::device::get_connected_device_list().await;
+            tracing::info!("on_load: found {} connected devices", devices.len());
+
+            for device in &devices {
+                tracing::info!("registering interconnect for device: {}", device.addr);
+                let result = crate::astrobox::psys_host::register::register_interconnect_recv(
+                    &device.addr,
+                    "com.application.zaona.weather",
+                ).await;
+                tracing::info!("register result: {:?}", result);
+            }
+        });
     }
 }
 
