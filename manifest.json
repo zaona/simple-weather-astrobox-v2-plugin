@@ -12,7 +12,8 @@
         "interconnect",
         "thirdpartyapp",
         "device",
-        "register_interconnect_recv"
+        "register_interconnect_recv",
+        "register_deeplink_action"
     ],
     "additional_files": []
 }
