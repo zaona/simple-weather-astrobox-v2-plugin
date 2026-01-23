@@ -23,24 +23,6 @@ pub fn build_main_ui() -> ui::Element {
         .width_full()
         .padding(20);
 
-    let message_element = if let Some(ref msg) = state.message {
-        let bg_color = if state.is_success { "#4CAF50" } else { "#FF4444" };
-        Some(
-            ui::Element::new(ui::ElementType::Div, None)
-                .bg(bg_color)
-                .radius(8)
-                .padding(12)
-                .margin_bottom(20)
-                .child(
-                    ui::Element::new(ui::ElementType::P, Some(msg))
-                        .size(14)
-                        .text_color("#FFFFFF"),
-                ),
-        )
-    } else {
-        None
-    };
-
     let input_label = ui::Element::new(ui::ElementType::P, Some("粘贴天气数据"))
         .size(16)
         .margin_bottom(8);
@@ -84,13 +66,7 @@ pub fn build_main_ui() -> ui::Element {
         .text_color("#888888")
         .margin_bottom(20);
 
-    let mut ui_tree = container;
-
-    if let Some(msg_el) = message_element {
-        ui_tree = ui_tree.child(msg_el);
-    }
-
-    ui_tree
+    container
         .child(input_label)
         .child(input_field)
         .child(send_button)

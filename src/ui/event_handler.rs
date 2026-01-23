@@ -4,7 +4,6 @@ use crate::astrobox::psys_host::register;
 use crate::astrobox::psys_host::thirdpartyapp;
 use crate::astrobox::psys_host::dialog;
 use super::state::*;
-use super::build::build_main_ui;
 
 pub fn handle_interconnect_message(payload: &str) {
     tracing::info!("收到快应用消息: {}", payload);
@@ -18,10 +17,11 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
             let parsed_value = parse_event_value(event_payload);
             tracing::info!("INPUT_CHANGE_EVENT, value={}", parsed_value);
             let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.weather_data = parsed_value;
-            state.message = None;
+            state.weather_data = parsed_value.clone();
+            tracing::info!("state.weather_data updated to: {}", parsed_value);
         }
         SEND_BUTTON_EVENT => {
+            tracing::info!("SEND_BUTTON_EVENT received");
             send_weather_data();
         }
         OPEN_WEATHER_EVENT => {
@@ -41,7 +41,7 @@ fn parse_event_value(payload: &str) -> String {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        tracing::info!("parse_event_value result: {}", value);
+        tracing::info!("parse_event_value result: '{}'", value);
         value
     } else {
         tracing::warn!("parse_event_value failed to parse JSON");
@@ -55,20 +55,22 @@ fn send_weather_data() {
     let weather_data = {
         let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
         let value = state.weather_data.clone();
-        tracing::info!("current weather_data: {}", value);
+        tracing::info!("read state.weather_data: '{}'", value);
         value
     };
 
+    tracing::info!("weather_data.is_empty(): {}", weather_data.is_empty());
+
     if weather_data.is_empty() {
-        tracing::warn!("weather_data is empty");
-        show_message("请先粘贴天气数据", false);
+        tracing::warn!("weather_data is empty, showing alert");
+        show_alert("提示", "请先粘贴天气数据");
         return;
     }
 
-    show_message("正在发送...", false);
+    tracing::info!("weather_data has content, starting send");
 
     let data = weather_data.clone();
-    tracing::info!("starting async send, data={}", data);
+    tracing::info!("data to send: '{}'", data);
 
     wit_bindgen::block_on(async move {
         tracing::info!("inside block_on");
@@ -76,19 +78,11 @@ fn send_weather_data() {
         match send_via_interconnect(&data).await {
             Ok(_) => {
                 tracing::info!("send_via_interconnect success");
-                show_message("发送成功", true);
-                let root_id = {
-                    let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
-                    state.root_element_id.clone()
-                };
-                if let Some(id) = root_id {
-                    let ui = build_main_ui();
-                    psys_host::ui::render(&id, ui);
-                }
+                show_alert("成功", "发送成功");
             }
             Err(e) => {
                 tracing::error!("send_via_interconnect error: {}", e);
-                show_message(&format!("发送失败: {}", e), false);
+                show_alert("失败", &format!("发送失败: {}", e));
             }
         }
     });
@@ -180,17 +174,27 @@ fn open_guide_page() {
     tracing::info!("opened guide page: {}", url);
 }
 
-fn show_message(msg: &str, is_success: bool) {
-    tracing::info!("show_message: {} (success={})", msg, is_success);
-    let root_id = {
-        let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.message = Some(msg.to_string());
-        state.is_success = is_success;
-        state.root_element_id.clone()
-    };
+fn show_alert(title: &str, message: &str) {
+    tracing::info!("show_alert: title={}, message={}", title, message);
 
-    if let Some(id) = root_id {
-        let ui = build_main_ui();
-        psys_host::ui::render(&id, ui);
-    }
+    let title_str = title.to_string();
+    let message_str = message.to_string();
+
+    wit_bindgen::block_on(async move {
+        tracing::info!("show_alert executing dialog::show_dialog");
+        let _ = dialog::show_dialog(
+            dialog::DialogType::Alert,
+            dialog::DialogStyle::Website,
+            &dialog::DialogInfo {
+                title: title_str,
+                content: message_str,
+                buttons: vec![dialog::DialogButton {
+                    id: "ok".to_string(),
+                    primary: true,
+                    content: "确定".to_string(),
+                }],
+            },
+        ).await;
+        tracing::info!("alert dialog closed");
+    });
 }
