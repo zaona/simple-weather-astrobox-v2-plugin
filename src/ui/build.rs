@@ -23,7 +23,7 @@ pub fn build_main_ui() -> ui::Element {
         .width_full()
         .padding(20);
 
-    let input_label = ui::Element::new(ui::ElementType::P, Some("粘贴天气数据"))
+    let input_label = ui::Element::new(ui::ElementType::P, Some("请粘贴天气数据"))
         .size(16)
         .margin_bottom(8);
 

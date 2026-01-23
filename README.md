@@ -47,7 +47,3 @@ python scripts/build_dist.py --release --package
 ```
 
 构建完成后，生成的 ABP 文件位于 `dist` 目录。
-
-### 安装到 AstroBox
-
-将生成的 `daymatter_astrobox_v2_plugin.wasm` 文件和 `manifest.json` 放置到 AstroBox 插件目录中。
