@@ -41,11 +41,11 @@ pub fn build_main_ui() -> ui::Element {
         None
     };
 
-    let input_label = ui::Element::new(ui::ElementType::P, Some("输入要发送的数据"))
+    let input_label = ui::Element::new(ui::ElementType::P, Some("粘贴天气数据"))
         .size(16)
         .margin_bottom(8);
 
-    let input_field = ui::Element::new(ui::ElementType::Input, Some(&state.input_value))
+    let input_field = ui::Element::new(ui::ElementType::Input, Some(&state.weather_data))
         .on(ui::Event::Change, INPUT_CHANGE_EVENT)
         .radius(8)
         .bg("#2A2A2A")
@@ -58,7 +58,31 @@ pub fn build_main_ui() -> ui::Element {
         .radius(8)
         .padding(14)
         .bg("#2A2A2A")
-        .width_full();
+        .width_full()
+        .margin_bottom(20);
+
+    let open_weather_button = ui::Element::new(ui::ElementType::Button, Some("打开天气数据查询网站"))
+        .without_default_styles()
+        .on(ui::Event::Click, OPEN_WEATHER_EVENT)
+        .radius(8)
+        .padding(14)
+        .bg("#2A2A2A")
+        .width_full()
+        .margin_bottom(20);
+
+    let open_guide_button = ui::Element::new(ui::ElementType::Button, Some("打开数据传输教程"))
+        .without_default_styles()
+        .on(ui::Event::Click, OPEN_GUIDE_EVENT)
+        .radius(8)
+        .padding(14)
+        .bg("#2A2A2A")
+        .width_full()
+        .margin_bottom(20);
+
+    let qq_tip = ui::Element::new(ui::ElementType::P, Some("QQ交流群：947038648"))
+        .size(14)
+        .text_color("#888888")
+        .margin_bottom(20);
 
     let mut ui_tree = container;
 
@@ -70,4 +94,7 @@ pub fn build_main_ui() -> ui::Element {
         .child(input_label)
         .child(input_field)
         .child(send_button)
+        .child(open_weather_button)
+        .child(open_guide_button)
+        .child(qq_tip)
 }
