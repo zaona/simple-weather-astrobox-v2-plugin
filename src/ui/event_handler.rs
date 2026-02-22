@@ -5,6 +5,12 @@ use crate::astrobox::psys_host::thirdpartyapp;
 use crate::astrobox::psys_host::dialog;
 use super::state::*;
 
+pub const INPUT_CHANGE_EVENT: &str = "input_change";
+pub const SEND_BUTTON_EVENT: &str = "send_button";
+pub const OPEN_WEATHER_EVENT: &str = "open_weather";
+pub const OPEN_GUIDE_EVENT: &str = "open_guide";
+
+
 pub fn handle_interconnect_message(payload: &str) {
     tracing::info!("收到快应用消息: {}", payload);
 }
@@ -25,11 +31,60 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
             send_weather_data();
         }
         OPEN_WEATHER_EVENT => {
-            open_weather_website();
+            tracing::info!("Handling open weather event, checking deeplink permission first...");
+            
+            // 首先检查状态中是否已注册深度链接
+            if crate::ui::state::is_deeplink_registered() {
+                tracing::info!("DeepLink action already registered in state, opening weather website");
+                open_weather_website();
+            } else {
+                // 在打开浏览器前检查并请求深度链接权限
+                wit_bindgen::block_on(async move {
+                    // 检查深度链接权限状态
+                    match register::register_deeplink_action().await {
+                        Ok(_) => {
+                            tracing::info!("DeepLink action registered, updating state and opening weather website");
+                            // 更新状态为已注册
+                            crate::ui::state::set_deeplink_registered(true);
+                            open_weather_website();
+                        },
+                        Err(e) => {
+                            tracing::info!("DeepLink action not registered, showing permission dialog: {:?}", e);
+                            
+                            // 创建对话框配置（仅保留确认按钮）
+                            let confirm_btn = dialog::DialogButton {
+                                id: "confirm".to_string(),
+                                primary: true,
+                                content: "同意并启用".to_string(),
+                            };
+                            
+                            let dialog_info = dialog::DialogInfo {
+                                title: "深度链接权限请求".to_string(),
+                                content: "该插件需要深度链接权限来接收天气数据。请点击\"同意并启用\"以允许插件接收外部应用发送的天气信息。".to_string(),
+                                buttons: vec![confirm_btn],
+                            };
+                            
+                            // 显示对话框请求用户授权（使用Website样式）
+                            let _result = dialog::show_dialog(
+                                dialog::DialogType::Alert,
+                                dialog::DialogStyle::Website,
+                                &dialog_info
+                            ).await;
+                            
+                            // 用户点击了确认按钮（唯一的按钮）
+                            tracing::info!("User confirmed deeplink permission request");
+                            // 用户同意后，我们假设权限已经获得，直接打开网站
+                            tracing::info!("User granted permission, opening weather website");
+                            open_weather_website();
+                        },
+                    }
+                });
+            }
         }
         OPEN_GUIDE_EVENT => {
             open_guide_page();
         }
+
         _ => {}
     }
 }
@@ -87,6 +142,8 @@ fn send_weather_data() {
         }
     });
 }
+
+
 
 async fn send_via_interconnect(data: &str) -> Result<(), String> {
     tracing::info!("send_via_interconnect start, data={}", data);
