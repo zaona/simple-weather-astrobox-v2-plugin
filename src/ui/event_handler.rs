@@ -176,6 +176,9 @@ async fn send_via_interconnect(data: &str) -> Result<(), String> {
         }
     }
 
+    tracing::info!("launching quick app before send...");
+    ensure_quick_app_launched(&device_addr, pkg_name, "/index").await?;
+
     tracing::info!("ensuring interconnect is registered for device: {}", device_addr);
     let _ = register::register_interconnect_recv(&device_addr, pkg_name).await;
     tracing::info!("register completed");
@@ -211,6 +214,26 @@ async fn check_quick_app_installed(device_addr: &str, pkg_name: &str) -> Result<
             Err(format!("{:?}", e))
         }
     }
+}
+
+async fn ensure_quick_app_launched(device_addr: &str, pkg_name: &str, page_name: &str) -> Result<(), String> {
+    tracing::info!("ensure_quick_app_launched: pkg={}, page={}", pkg_name, page_name);
+
+    let app_list = thirdpartyapp::get_thirdparty_app_list(device_addr)
+        .await
+        .map_err(|e| format!("{:?}", e))?;
+
+    let app = app_list
+        .iter()
+        .find(|app| app.package_name == pkg_name)
+        .ok_or_else(|| "请先安装简明天气快应用".to_string())?;
+
+    thirdpartyapp::launch_qa(device_addr, app, page_name)
+        .await
+        .map_err(|e| format!("{:?}", e))?;
+
+    tracing::info!("quick app launched");
+    Ok(())
 }
 
 fn open_weather_website() {
