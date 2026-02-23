@@ -91,8 +91,11 @@ impl event::Guest for MyPlugin {
         reader
     }
 
-    fn on_card_render(_card_id: _rt::String) -> wit_bindgen::rt::async_support::FutureReader<()> {
+    fn on_card_render(card_id: _rt::String) -> wit_bindgen::rt::async_support::FutureReader<()> {
         let (writer, reader) = wit_future::new::<()>(|| ());
+
+        tracing::info!("on_card_render called: {}", card_id);
+        ui::render_sync_card(&card_id);
 
         wit_bindgen::spawn(async move {
             let _ = writer.write(()).await;
@@ -133,6 +136,17 @@ impl lifecycle::Guest for MyPlugin {
                 ).await;
                 tracing::info!("register interconnect result: {:?}", result);
             }
+        });
+
+        wit_bindgen::spawn(async move {
+            let result = crate::astrobox::psys_host::register::register_card(
+                crate::astrobox::psys_host::register::CardType::Text,
+                crate::ui::SYNC_CARD_ID,
+                crate::ui::SYNC_CARD_NAME,
+            )
+            .await;
+            tracing::info!("register card result: {:?}", result);
+            crate::ui::render_sync_card(crate::ui::SYNC_CARD_ID);
         });
         
         // 单独的异步任务：使用对话框请求用户授权注册deeplink action
