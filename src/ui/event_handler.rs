@@ -3,12 +3,22 @@ use crate::astrobox::psys_host::interconnect;
 use crate::astrobox::psys_host::register;
 use crate::astrobox::psys_host::thirdpartyapp;
 use crate::astrobox::psys_host::dialog;
+use waki::Client;
 use super::state::*;
 
 pub const INPUT_CHANGE_EVENT: &str = "input_change";
 pub const SEND_BUTTON_EVENT: &str = "send_button";
 pub const OPEN_WEATHER_EVENT: &str = "open_weather";
 pub const OPEN_GUIDE_EVENT: &str = "open_guide";
+pub const TAB_PASTE_EVENT: &str = "tab_paste";
+pub const TAB_CUSTOM_API_EVENT: &str = "tab_custom_api";
+pub const CUSTOM_API_HOST_CHANGE_EVENT: &str = "custom_api_host_change";
+pub const CUSTOM_API_KEY_CHANGE_EVENT: &str = "custom_api_key_change";
+pub const API_SAVE_TEST_EVENT: &str = "api_save_test";
+pub const API_RESET_EVENT: &str = "api_reset";
+pub const API_HELP_EVENT: &str = "api_help";
+pub const TOGGLE_SHOW_API_HOST_EVENT: &str = "toggle_show_api_host";
+pub const TOGGLE_SHOW_API_KEY_EVENT: &str = "toggle_show_api_key";
 
 
 pub fn handle_interconnect_message(payload: &str) {
@@ -26,9 +36,49 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
             state.weather_data = parsed_value.clone();
             tracing::info!("state.weather_data updated to: {}", parsed_value);
         }
+        CUSTOM_API_HOST_CHANGE_EVENT => {
+            let parsed_value = parse_event_value(event_payload);
+            let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.custom_api_host = parsed_value.clone();
+            tracing::info!("state.custom_api_host updated to: {}", parsed_value);
+        }
+        CUSTOM_API_KEY_CHANGE_EVENT => {
+            let parsed_value = parse_event_value(event_payload);
+            let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.custom_api_key = parsed_value.clone();
+            tracing::info!("state.custom_api_key updated");
+        }
         SEND_BUTTON_EVENT => {
             tracing::info!("SEND_BUTTON_EVENT received");
             send_weather_data();
+        }
+        TAB_PASTE_EVENT => {
+            let should_rerender = {
+                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+                if state.current_tab != MainTab::PasteData {
+                    state.current_tab = MainTab::PasteData;
+                    true
+                } else {
+                    false
+                }
+            };
+            if should_rerender {
+                crate::ui::build::rerender_main_ui();
+            }
+        }
+        TAB_CUSTOM_API_EVENT => {
+            let should_rerender = {
+                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+                if state.current_tab != MainTab::CustomApi {
+                    state.current_tab = MainTab::CustomApi;
+                    true
+                } else {
+                    false
+                }
+            };
+            if should_rerender {
+                crate::ui::build::rerender_main_ui();
+            }
         }
         OPEN_WEATHER_EVENT => {
             tracing::info!("Handling open weather event, checking deeplink permission first...");
@@ -83,6 +133,35 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
         }
         OPEN_GUIDE_EVENT => {
             open_guide_page();
+        }
+        API_SAVE_TEST_EVENT => {
+            save_and_test_custom_api();
+        }
+        API_RESET_EVENT => {
+            reset_custom_api();
+        }
+        API_HELP_EVENT => {
+            open_api_help_page();
+        }
+        TOGGLE_SHOW_API_HOST_EVENT => {
+            let should_rerender = {
+                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.show_api_host = !state.show_api_host;
+                true
+            };
+            if should_rerender {
+                crate::ui::build::rerender_main_ui();
+            }
+        }
+        TOGGLE_SHOW_API_KEY_EVENT => {
+            let should_rerender = {
+                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.show_api_key = !state.show_api_key;
+                true
+            };
+            if should_rerender {
+                crate::ui::build::rerender_main_ui();
+            }
         }
 
         _ => {}
@@ -257,6 +336,15 @@ fn open_guide_page() {
     tracing::info!("opened guide page: {}", url);
 }
 
+fn open_api_help_page() {
+    tracing::info!("open_api_help_page called");
+
+    let url = "https://www.yuque.com/zaona/weather/api";
+
+    dialog::open_url(url);
+    tracing::info!("opened api help page: {}", url);
+}
+
 fn show_alert(title: &str, message: &str) {
     tracing::info!("show_alert: title={}, message={}", title, message);
 
@@ -280,4 +368,73 @@ fn show_alert(title: &str, message: &str) {
         ).await;
         tracing::info!("alert dialog closed");
     });
+}
+
+fn save_and_test_custom_api() {
+    let (host, key) = {
+        let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        (state.custom_api_host.clone(), state.custom_api_key.clone())
+    };
+
+    match test_custom_api_connection(&host, &key) {
+        Ok(_) => {
+            {
+                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.use_custom_api = true;
+                state.custom_api_host = host.trim().to_string();
+                state.custom_api_key = key.trim().to_string();
+            }
+            if let Err(e) = crate::ui::state::save_api_settings(true, host.trim(), key.trim()) {
+                show_alert("保存失败", &format!("写入配置失败: {}", e));
+            } else {
+                show_alert("保存成功", "配置已保存并验证通过");
+            }
+        }
+        Err(message) => {
+            show_alert("验证失败", &message);
+        }
+    }
+}
+
+fn reset_custom_api() {
+    {
+        let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.use_custom_api = false;
+        state.custom_api_host.clear();
+        state.custom_api_key.clear();
+    }
+    if let Err(e) = crate::ui::state::clear_api_settings() {
+        show_alert("重置失败", &format!("清理配置失败: {}", e));
+    } else {
+        show_alert("重置成功", "已恢复默认配置");
+    }
+    crate::ui::build::rerender_main_ui();
+}
+
+fn test_custom_api_connection(host: &str, key: &str) -> Result<(), String> {
+    let host = host.trim();
+    let key = key.trim();
+
+    if host.is_empty() {
+        return Err("API Host 不能为空".to_string());
+    }
+    if key.is_empty() {
+        return Err("API Key 不能为空".to_string());
+    }
+
+    let url = format!("https://{}/geo/v2/city/lookup?location=北京&key={}", host, key);
+    let client = Client::new();
+
+    let response = client.get(&url).send().map_err(|e| format!("{:?}", e))?;
+
+    let status_code = response.status_code();
+    if status_code != 200 {
+        return match status_code {
+            401 => Err("API密钥无效或已过期".to_string()),
+            403 => Err("访问被拒绝，请检查API权限".to_string()),
+            _ => Err(format!("API Error: {}", status_code)),
+        };
+    }
+
+    Ok(())
 }
