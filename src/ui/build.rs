@@ -140,7 +140,7 @@ fn build_settings_main(state: &UiState) -> ui::Element {
 
     if state.use_custom_api {
         let adv_card = build_settings_card(
-            server_svg(),
+            adv_mode_svg(),
             "高级同步模式",
             Some("开启后可直接在插件内搜索位置并获取天气数据"),
             Some(build_switch(state.advanced_mode, ADV_MODE_TOGGLE_EVENT)),
@@ -166,7 +166,7 @@ fn build_settings_main(state: &UiState) -> ui::Element {
         afd_svg(),
         "去爱发电支持简明天气",
         Some("简明完全免费，开源，我们需要您的支持！"),
-        Some(build_arrow_icon()),
+        Some(build_more_link_icon()),
         Some(OPEN_AFD_EVENT),
     );
 
@@ -174,7 +174,7 @@ fn build_settings_main(state: &UiState) -> ui::Element {
         help_doc_svg(),
         "帮助文档",
         Some("有什么不懂的吗？我们完成了简明所有能想到的问题"),
-        Some(build_arrow_icon()),
+        Some(build_more_link_icon()),
         Some(OPEN_HELP_DOC_EVENT),
     );
 
@@ -182,14 +182,56 @@ fn build_settings_main(state: &UiState) -> ui::Element {
         qq_group_svg(),
         "QQ群",
         Some("文档也没解决吗，那来QQ群反馈吧"),
-        Some(build_arrow_icon()),
+        Some(build_more_link_icon()),
         Some(OPEN_QQ_GROUP_EVENT),
+    );
+
+    let build_title = build_section_title("构建信息");
+
+    let build_time_raw = option_env!("AB_BUILD_TIME").unwrap_or("unknown");
+    let build_user = option_env!("AB_BUILD_USER").unwrap_or("unknown");
+    let build_branch = option_env!("AB_BUILD_GIT_BRANCH").unwrap_or("unknown");
+    let build_hash = option_env!("AB_BUILD_GIT_HASH").unwrap_or("unknown");
+    let build_time = format_beijing_time(build_time_raw);
+
+    let build_time_row = build_settings_card(
+        build_time_svg(),
+        "构建时间",
+        None,
+        Some(build_value_text(&build_time)),
+        None,
+    );
+    let build_user_row = build_settings_card(
+        build_user_svg(),
+        "构建用户",
+        None,
+        Some(build_value_text(build_user)),
+        None,
+    );
+    let build_branch_row = build_settings_card(
+        build_branch_svg(),
+        "当前分支",
+        None,
+        Some(build_value_text(build_branch)),
+        None,
+    );
+    let build_hash_row = build_settings_card(
+        build_hash_svg(),
+        "当前hash",
+        None,
+        Some(build_value_text(&build_hash)),
+        None,
     );
 
     root
         .child(afd_card.margin_bottom(10))
         .child(help_card.margin_bottom(10))
-        .child(qq_card)
+        .child(qq_card.margin_bottom(18))
+        .child(build_title)
+        .child(build_time_row.margin_bottom(10))
+        .child(build_user_row.margin_bottom(10))
+        .child(build_branch_row.margin_bottom(10))
+        .child(build_hash_row)
 }
 
 fn build_settings_api(state: &UiState) -> ui::Element {
@@ -287,6 +329,91 @@ fn build_settings_api(state: &UiState) -> ui::Element {
         .child(key_row)
         .child(save_button)
         .child(action_row.child(reset_button).child(help_button))
+}
+
+fn format_beijing_time(raw: &str) -> String {
+    if let Some((y, m, d, hh, mm, ss)) = parse_iso_utc(raw) {
+        let (y2, m2, d2, hh2) = add_hours(y, m, d, hh, 8);
+        return format!(
+            "{:04}‑{:02}‑{:02}_{:02}:{:02}:{:02}",
+            y2, m2, d2, hh2, mm, ss
+        );
+    }
+    raw.to_string()
+}
+
+fn parse_iso_utc(raw: &str) -> Option<(i32, i32, i32, i32, i32, i32)> {
+    if raw.len() < 19 {
+        return None;
+    }
+    let base = &raw[..19];
+    let mut parts = base.split('T');
+    let date = parts.next()?;
+    let time = parts.next()?;
+    let mut dparts = date.split('-');
+    let y: i32 = dparts.next()?.parse().ok()?;
+    let m: i32 = dparts.next()?.parse().ok()?;
+    let d: i32 = dparts.next()?.parse().ok()?;
+    let mut tparts = time.split(':');
+    let hh: i32 = tparts.next()?.parse().ok()?;
+    let mm: i32 = tparts.next()?.parse().ok()?;
+    let ss: i32 = tparts.next()?.parse().ok()?;
+    Some((y, m, d, hh, mm, ss))
+}
+
+fn add_hours(mut y: i32, mut m: i32, mut d: i32, mut hh: i32, add: i32) -> (i32, i32, i32, i32) {
+    hh += add;
+    while hh >= 24 {
+        hh -= 24;
+        d += 1;
+        let dim = days_in_month(y, m);
+        if d > dim {
+            d = 1;
+            m += 1;
+            if m > 12 {
+                m = 1;
+                y += 1;
+            }
+        }
+    }
+    (y, m, d, hh)
+}
+
+fn days_in_month(y: i32, m: i32) -> i32 {
+    match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if is_leap_year(y) { 29 } else { 28 }
+        }
+        _ => 30,
+    }
+}
+
+fn is_leap_year(y: i32) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
+}
+
+fn build_value_text(value: &str) -> ui::Element {
+    ui::Element::new(ui::ElementType::P, Some(value))
+        .size(13)
+        .text_color("#BBBBBB")
+}
+
+fn build_time_svg() -> String {
+    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><circle cx="128" cy="128" r="96" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><polyline points="128 72 128 128 184 128" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg>"#.to_string()
+}
+
+fn build_user_svg() -> String {
+    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><circle cx="128" cy="96" r="64" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><path d="M32,216c19.37-33.47,54.55-56,96-56s76.63,22.53,96,56" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg>"#.to_string()
+}
+
+fn build_branch_svg() -> String {
+    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><path d="M80,168V144a16,16,0,0,1,16-16h88a16,16,0,0,0,16-16V88" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><line x1="80" y1="88" x2="80" y2="168" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><circle cx="80" cy="64" r="24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><circle cx="200" cy="64" r="24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><circle cx="80" cy="192" r="24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg>"#.to_string()
+}
+
+fn build_hash_svg() -> String {
+    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><line x1="48" y1="96" x2="224" y2="96" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><line x1="176" y1="40" x2="144" y2="216" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><line x1="112" y1="40" x2="80" y2="216" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><line x1="32" y1="160" x2="208" y2="160" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg>"#.to_string()
 }
 
 fn build_round_icon_button(icon_svg: String, event_id: &str) -> ui::Element {
@@ -604,8 +731,8 @@ fn build_section_title(text: &str) -> ui::Element {
         .margin_bottom(8)
 }
 
-fn server_svg() -> String {
-    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><rect x="40" y="144" width="176" height="64" rx="8" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><rect x="40" y="48" width="176" height="64" rx="8" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><circle cx="180" cy="80" r="12"/><circle cx="180" cy="176" r="12"/></svg>"#.to_string()
+fn adv_mode_svg() -> String {
+    r##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="#FFFFFF" viewBox="0 0 256 256"><path d="M208,136H48a16,16,0,0,0-16,16v48a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V152A16,16,0,0,0,208,136Zm0,64H48V152H208v48Zm0-160H48A16,16,0,0,0,32,56v48a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V56A16,16,0,0,0,208,40Zm0,64H48V56H208v48ZM192,80a12,12,0,1,1-12-12A12,12,0,0,1,192,80Zm0,96a12,12,0,1,1-12-12A12,12,0,0,1,192,176Z"></path></svg>"##.to_string()
 }
 
 fn build_arrow_icon() -> ui::Element {
@@ -616,12 +743,24 @@ fn build_arrow_icon() -> ui::Element {
         .text_color("#888888")
 }
 
+fn build_more_link_icon() -> ui::Element {
+    let svg = more_link_svg();
+    ui::Element::new(ui::ElementType::Svg, Some(&svg))
+        .width(18)
+        .height(18)
+        .text_color("#888888")
+}
+
 fn arrow_right_svg() -> String {
     r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><line x1="40" y1="128" x2="216" y2="128" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><polyline points="144 56 216 128 144 200" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg>"#.to_string()
 }
 
+fn more_link_svg() -> String {
+    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><path d="M141.38,64.68l11-11a46.62,46.62,0,0,1,65.94,0h0a46.62,46.62,0,0,1,0,65.94L193.94,144,183.6,154.34a46.63,46.63,0,0,1-66-.05h0A46.48,46.48,0,0,1,104,120.06" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><path d="M114.62,191.32l-11,11a46.63,46.63,0,0,1-66-.05h0a46.63,46.63,0,0,1,.06-65.89L72.4,101.66a46.62,46.62,0,0,1,65.94,0h0A46.45,46.45,0,0,1,152,135.94" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg>"#.to_string()
+}
+
 fn help_doc_svg() -> String {
-    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><circle cx="128" cy="180" r="12"/><path d="M128,144v-8c17.67,0,32-12.54,32-28s-14.33-28-32-28S96,92.54,96,108v4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><circle cx="128" cy="128" r="96" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg>"#.to_string()
+    help_svg()
 }
 
 fn qq_group_svg() -> String {
@@ -629,7 +768,7 @@ fn qq_group_svg() -> String {
 }
 
 fn afd_svg() -> String {
-    r##"<svg t="1771837556055" class="icon" viewBox="0 0 1027 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" p-id="5390"><path d="M247.562814 276.817487c7.38929 0.604971 14.77858 1.814913 22.167869 1.685277 83.486011-1.598852 166.972022-3.802675 250.501245-5.012618 58.379711-0.821032 115.030932 9.031354 167.576993 35.261173 75.751023 37.810693 135.81601 91.82597 165.113896 173.583491 13.006879 36.298266 10.457357 74.022534-3.11128 110.018315-6.784319 17.976284-5.660801 28.347217 13.957548 36.989661 33.705532 14.865004 46.064228 38.199603 36.730388 61.577415-9.506689 23.809934-42.045491 37.378571-72.250834 25.408786-21.390049-8.469595-33.359835-3.327341-48.4409 12.056209-42.21834 42.99616-96.233616 64.299785-154.09478 76.701693-73.374351 15.729248-146.143731 11.148753-217.789593-9.549901-53.972064-15.599612-103.579694-38.631726-136.118496-88.282568-33.014137-50.342237-26.618728-113.561717 16.93919-155.088661 5.185467-4.969405 10.11166-10.327721 15.815673-14.60573 17.673798-13.266152 29.730008-24.933451 15.037853-50.77436-11.753724-20.655442 13.525425-45.459256 41.008398-42.650462 11.27839 1.16673 22.081445 6.568258 33.359834 8.296746 7.821412 1.209942 16.679917 1.080306 23.982783-1.469215 4.796557-1.685277 7.734988-8.728869 11.494451-13.352576-5.358315-2.592733-10.457357-6.438621-16.118159-7.605351-70.997679-14.951428-142.946027-26.402667-212.776976-45.588893-29.686796-8.16711-58.077225-28.952188-81.54146-50.126177-35.304385-31.847407-29.730008-76.226358 9.809174-102.5426 43.039372-28.649702 91.480272-41.267671 143.032451-42.088703 5.660801-0.086424 12.488332 0.043212 16.766342 2.981643 8.426383 5.790438 20.050471 12.704393 21.692535 20.871503 1.598852 7.951049-5.617589 20.180107-12.531544 26.791577-8.55602 8.123898-20.828291 12.44512-31.544922 18.321981-6.61147 3.629827-13.266152 7.173229-19.920834 10.759843 0.38891 2.506309 0.821032 4.969405 1.253155 7.432502z m-98.955986-11.580875c-20.698654 11.191965-20.093683 25.88412-9.377052 37.032874 14.173608 14.77858 30.205342 31.760982 48.700173 37.594632 57.299405 18.192345 115.981601 32.279529 174.447736 46.582774 30.594252 7.518926 62.484872 10.154872 92.603789 19.013377 16.204583 4.753344 28.001519 5.358315 41.743006-4.580495 14.476094-10.50057 30.032494-20.050471 46.323501-27.266912 5.660801-2.506309 18.797316 1.037093 21.649322 5.83365 2.981643 5.05583-0.259273 16.507068-4.580495 22.340718-4.796557 6.525045-14.00076 9.679537-21.044352 14.648943-73.417563 51.681816-148.390767 101.332658-219.604506 155.952906-41.82943 32.063468-44.94071 77.998059-14.648943 120.648521 10.543782 14.821792 24.847027 28.822551 40.533063 37.767481 89.017175 50.817572 184.516183 62.225598 283.601806 38.977423 44.854285-10.543782 88.368992-26.66194 122.031312-60.583534 5.271891-5.315103 7.432502-14.173608 9.809174-21.822171 2.506309-8.080685 3.456978-16.593493 5.099042-24.933452 8.512808 1.901338 17.155252 3.327341 25.495211 5.83365 19.877622 5.920074 39.409546 12.877242 59.460016 18.062708 4.148373 1.080306 9.765962-3.586614 14.735367-5.617588-2.290248-5.401528-3.197704-13.741486-7.216441-15.642824-9.938811-4.839769-21.2172-8.94493-32.10668-9.33384-19.315863-0.734608-37.94033-2.549521-51.206482-17.760223-4.753344-5.44474-4.969405-14.821792-7.216441-22.38393 7.38929-1.94455 14.951428-3.456978 22.16787-5.963287 7.475714-2.592733 19.013377-4.27801 21.2172-9.549901 22.167869-53.280668 20.698654-104.357514-14.476094-153.187323-63.82445-88.671477-150.20568-134.778917-258.625142-137.112377-63.262691-1.382791-126.611807 3.586614-189.917712 3.586614-50.255813 0-100.641263-1.901338-150.767438-5.660801-23.248175-1.728489-45.891379-10.11166-48.82981-42.477613z m75.405325-25.927332c-0.907457-2.549521-1.858126-5.142254-2.765582-7.691776-13.61185 4.061949-27.482973 7.38929-40.619487 12.574757-4.537283 1.771701-7.173229 8.253534-10.716631 12.574756 6.179348 1.685277 13.827911 6.481833 18.321981 4.450859 12.617969-5.83365 23.93957-14.432882 35.779719-21.908596z" fill="#ffffff" p-id="5391"></path><path d="M400.663713 624.546229c-8.642444-12.099422-17.803435-19.402287-17.846648-26.705152-0.043212-6.049711 10.716631-12.185846 16.679918-18.27877 6.395409 6.438621 16.463856 12.099422 17.976284 19.488712 1.16673 5.704013-8.469595 13.568637-16.809554 25.49521zM580.815462 681.197451c-8.123898-12.358695-17.544162-20.396168-16.291007-26.229818 1.55564-7.38929 11.753724-12.920454 18.235557-19.272651 5.83365 6.308984 16.33422 12.661181 16.247795 18.840529-0.086424 7.302865-9.33384 14.519306-18.192345 26.66194z" fill="#ffffff" p-id="5392"></path></svg>"##.to_string()
+    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><path d="M48,208H16a8,8,0,0,1-8-8V160a8,8,0,0,1,8-8H48" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><path d="M112,160h32l67-15.41a16.61,16.61,0,0,1,21,16h0a16.59,16.59,0,0,1-9.18,14.85L184,192l-64,16H48V152l25-25a24,24,0,0,1,17-7H140a20,20,0,0,1,20,20h0a20,20,0,0,1-20,20Z" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><path d="M96.73,120C87,107.72,80,94.56,80,80c0-21.69,17.67-40,39.46-40A39.12,39.12,0,0,1,156,64a39.12,39.12,0,0,1,36.54-24C214.33,40,232,58.31,232,80c0,29.23-28.18,55.07-50.22,71.32" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg>"#.to_string()
 }
 
 fn location_pin_svg(selected: bool) -> String {
@@ -813,7 +952,7 @@ fn help_tab_svg() -> String {
         .to_string()
 }
 
-fn guide_svg() -> String {
+fn help_svg() -> String {
     r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
 <rect width="256" height="256" fill="none"/>
 <circle cx="128" cy="180" r="12" fill="#FFFFFF"/>
@@ -821,6 +960,10 @@ fn guide_svg() -> String {
 <circle cx="128" cy="128" r="96" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
 </svg>"##
         .to_string()
+}
+
+fn guide_svg() -> String {
+    help_svg()
 }
 
 fn open_site_svg() -> String {
