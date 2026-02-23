@@ -9,6 +9,8 @@ use flate2::read::GzDecoder;
 use waki::bindings::wasi::http::{outgoing_handler, types as http_types};
 use waki::bindings::wasi::io::streams::StreamError;
 use super::state::*;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const INPUT_CHANGE_EVENT: &str = "input_change";
 pub const SEND_BUTTON_EVENT: &str = "send_button";
@@ -25,16 +27,25 @@ pub const TOGGLE_SHOW_API_HOST_EVENT: &str = "toggle_show_api_host";
 pub const TOGGLE_SHOW_API_KEY_EVENT: &str = "toggle_show_api_key";
 pub const OPEN_SETTINGS_API_EVENT: &str = "open_settings_api";
 pub const SETTINGS_BACK_EVENT: &str = "settings_back";
-pub const ADV_MODE_ON_EVENT: &str = "adv_mode_on";
-pub const ADV_MODE_OFF_EVENT: &str = "adv_mode_off";
+pub const ADV_MODE_TOGGLE_EVENT: &str = "adv_mode_toggle";
+pub const OPEN_HELP_DOC_EVENT: &str = "open_help_doc";
+pub const OPEN_QQ_GROUP_EVENT: &str = "open_qq_group";
+pub const OPEN_AFD_EVENT: &str = "open_afd";
 pub const SEARCH_INPUT_CHANGE_EVENT: &str = "search_input_change";
 pub const SEARCH_BUTTON_EVENT: &str = "search_button";
+pub const SEARCH_INPUT_SUBMIT_EVENT: &str = "search_input_submit";
 pub const SELECT_LOCATION_PREFIX: &str = "select_location:";
 pub const SELECT_DAYS_PREFIX: &str = "select_days:";
 
 
+static LAST_READY_TS_MS: AtomicU64 = AtomicU64::new(0);
+
 pub fn handle_interconnect_message(payload: &str) {
     tracing::info!("收到快应用消息: {}", payload);
+    if payload.contains("ready") {
+        LAST_READY_TS_MS.store(now_ms(), Ordering::SeqCst);
+        tracing::info!("interconnect ready detected");
+    }
 }
 
 pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::event::Event, event_id: &str, event_payload: &str) {
@@ -146,6 +157,15 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
         OPEN_GUIDE_EVENT => {
             open_guide_page();
         }
+        OPEN_HELP_DOC_EVENT => {
+            open_help_doc_page();
+        }
+        OPEN_QQ_GROUP_EVENT => {
+            open_qq_group_page();
+        }
+        OPEN_AFD_EVENT => {
+            open_afd_page();
+        }
         API_SAVE_TEST_EVENT => {
             save_and_test_custom_api();
         }
@@ -175,30 +195,11 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
                 crate::ui::build::rerender_main_ui();
             }
         }
-        ADV_MODE_ON_EVENT => {
+        ADV_MODE_TOGGLE_EVENT => {
             let should_rerender = {
                 let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
-                if !state.advanced_mode {
-                    state.advanced_mode = true;
-                    true
-                } else {
-                    false
-                }
-            };
-            if should_rerender {
-                let _ = crate::ui::state::save_all_settings();
-                crate::ui::build::rerender_main_ui();
-            }
-        }
-        ADV_MODE_OFF_EVENT => {
-            let should_rerender = {
-                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
-                if state.advanced_mode {
-                    state.advanced_mode = false;
-                    true
-                } else {
-                    false
-                }
+                state.advanced_mode = !state.advanced_mode;
+                true
             };
             if should_rerender {
                 let _ = crate::ui::state::save_all_settings();
@@ -209,6 +210,16 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
             let parsed_value = parse_event_value(event_payload);
             let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
             state.search_query = parsed_value;
+        }
+        SEARCH_INPUT_SUBMIT_EVENT => {
+            let parsed_value = parse_event_value(event_payload);
+            {
+                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.search_query = parsed_value;
+            }
+            if payload_has_enter(event_payload) {
+                search_locations();
+            }
         }
         SEARCH_BUTTON_EVENT => {
             search_locations();
@@ -251,6 +262,14 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
             }
         }
     }
+}
+
+fn payload_has_enter(payload: &str) -> bool {
+    payload.contains("\"key\":\"Enter\"")
+        || payload.contains("\"code\":\"Enter\"")
+        || payload.contains("\"keyCode\":13")
+        || payload.contains("\"which\":13")
+        || payload.contains("Enter")
 }
 
 fn parse_event_value(payload: &str) -> String {
@@ -413,12 +432,19 @@ async fn send_via_interconnect(data: &str) -> Result<(), String> {
         }
     }
 
-    tracing::info!("launching quick app before send...");
-    ensure_quick_app_launched(&device_addr, pkg_name, "/index").await?;
-
     tracing::info!("ensuring interconnect is registered for device: {}", device_addr);
     let _ = register::register_interconnect_recv(&device_addr, pkg_name).await;
     tracing::info!("register completed");
+
+    tracing::info!("launching quick app before send...");
+    ensure_quick_app_launched(&device_addr, pkg_name, "/index").await?;
+
+    tracing::info!("starting handshake loop...");
+    LAST_READY_TS_MS.store(0, Ordering::SeqCst);
+    let ready = perform_handshake(&device_addr, pkg_name).await?;
+    if !ready {
+        return Err("握手失败：设备未响应".to_string());
+    }
 
     let data_str = data.to_string();
 
@@ -430,6 +456,33 @@ async fn send_via_interconnect(data: &str) -> Result<(), String> {
     tracing::info!("send_qaic_message completed");
 
     Ok(())
+}
+
+async fn perform_handshake(device_addr: &str, pkg_name: &str) -> Result<bool, String> {
+    let max_attempts = 15;
+    for attempt in 0..max_attempts {
+        let last_before = LAST_READY_TS_MS.load(Ordering::SeqCst);
+        tracing::info!("handshake attempt {}", attempt + 1);
+        interconnect::send_qaic_message(device_addr, pkg_name, "start")
+            .await
+            .map_err(|e| format!("{:?}", e))?;
+
+        for _ in 0..12 {
+            if LAST_READY_TS_MS.load(Ordering::SeqCst) > last_before {
+                tracing::info!("handshake ready received");
+                return Ok(true);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    Ok(false)
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 async fn check_quick_app_installed(device_addr: &str, pkg_name: &str) -> Result<bool, String> {
@@ -501,6 +554,27 @@ fn open_api_help_page() {
 
     dialog::open_url(url);
     tracing::info!("opened api help page: {}", url);
+}
+
+fn open_help_doc_page() {
+    tracing::info!("open_help_doc_page called");
+    let url = "https://www.yuque.com/zaona/weather";
+    dialog::open_url(url);
+    tracing::info!("opened help doc page: {}", url);
+}
+
+fn open_qq_group_page() {
+    tracing::info!("open_qq_group_page called");
+    let url = "https://qm.qq.com/q/njSLR4VNja";
+    dialog::open_url(url);
+    tracing::info!("opened qq group page: {}", url);
+}
+
+fn open_afd_page() {
+    tracing::info!("open_afd_page called");
+    let url = "https://afdian.com/a/zaona";
+    dialog::open_url(url);
+    tracing::info!("opened afd page: {}", url);
 }
 
 fn show_alert(title: &str, message: &str) {
