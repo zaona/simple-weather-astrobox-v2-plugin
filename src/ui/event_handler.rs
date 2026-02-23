@@ -223,10 +223,13 @@ async fn ensure_quick_app_launched(device_addr: &str, pkg_name: &str, page_name:
         .await
         .map_err(|e| format!("{:?}", e))?;
 
-    let app = app_list
-        .iter()
-        .find(|app| app.package_name == pkg_name)
-        .ok_or_else(|| "请先安装简明天气快应用".to_string())?;
+    let app = match app_list.iter().find(|app| app.package_name == pkg_name) {
+        Some(app) => app,
+        None => {
+            show_alert("未安装", "请先安装简明天气快应用");
+            return Err("请先安装简明天气快应用".to_string());
+        }
+    };
 
     thirdpartyapp::launch_qa(device_addr, app, page_name)
         .await
@@ -261,7 +264,7 @@ fn show_alert(title: &str, message: &str) {
     let message_str = message.to_string();
 
     wit_bindgen::block_on(async move {
-        tracing::info!("show_alert executing dialog::show_dialog");
+        tracing::info!("show_alert executing dialog::show_dialog (Website style)");
         let _ = dialog::show_dialog(
             dialog::DialogType::Alert,
             dialog::DialogStyle::Website,
