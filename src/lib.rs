@@ -92,6 +92,7 @@ impl lifecycle::Guest for MyPlugin {
     #[allow(async_fn_in_trait)]
     fn on_load() -> () {
         logger::init();
+        tracing::info!("BUILD_ID=2026-02-24T02:27:00Z");
         tracing::info!("Simple Interconnect Plugin Loaded!");
 
         // 异步操作：获取设备列表并注册所有需要的服务

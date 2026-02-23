@@ -9,7 +9,8 @@ use flate2::read::GzDecoder;
 use waki::bindings::wasi::http::{outgoing_handler, types as http_types};
 use waki::bindings::wasi::io::streams::StreamError;
 use super::state::*;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const INPUT_CHANGE_EVENT: &str = "input_change";
@@ -39,12 +40,39 @@ pub const SELECT_DAYS_PREFIX: &str = "select_days:";
 
 
 static LAST_READY_TS_MS: AtomicU64 = AtomicU64::new(0);
+static HANDSHAKE_RUNNING: AtomicBool = AtomicBool::new(false);
+
+struct PendingSend {
+    device_addr: String,
+    pkg_name: String,
+    data: String,
+}
+
+static PENDING_SEND: OnceLock<Mutex<Option<PendingSend>>> = OnceLock::new();
+
+fn pending_send() -> &'static Mutex<Option<PendingSend>> {
+    PENDING_SEND.get_or_init(|| Mutex::new(None))
+}
 
 pub fn handle_interconnect_message(payload: &str) {
     tracing::info!("收到快应用消息: {}", payload);
-    if payload.contains("ready") {
+
+    let (addr, pkg, payload_text) = extract_interconnect_fields(payload);
+    tracing::info!(
+        "interconnect fields: addr={:?}, pkg={:?}, payload_text_len={}",
+        addr,
+        pkg,
+        payload_text.as_ref().map(|s| s.len()).unwrap_or(0)
+    );
+    let check_text = payload_text.as_deref().unwrap_or(payload);
+
+    if check_text.contains("ready") {
         LAST_READY_TS_MS.store(now_ms(), Ordering::SeqCst);
         tracing::info!("interconnect ready detected");
+
+        if let (Some(addr), Some(pkg)) = (addr, pkg) {
+            try_send_pending(addr, pkg);
+        }
     }
 }
 
@@ -323,9 +351,12 @@ fn send_weather_data() {
         tracing::info!("inside block_on");
 
         match send_via_interconnect(&data).await {
-            Ok(_) => {
+            Ok(SendOutcome::Sent) => {
                 tracing::info!("send_via_interconnect success");
                 show_alert("成功", "发送成功");
+            }
+            Ok(SendOutcome::Pending) => {
+                tracing::info!("send_via_interconnect pending; waiting for ready");
             }
             Err(e) => {
                 tracing::error!("send_via_interconnect error: {}", e);
@@ -377,7 +408,10 @@ fn send_weather_data_advanced() {
             let payload = json.to_string();
             wit_bindgen::block_on(async move {
                 match send_via_interconnect(&payload).await {
-                    Ok(_) => show_alert("成功", "发送成功"),
+                    Ok(SendOutcome::Sent) => show_alert("成功", "发送成功"),
+                    Ok(SendOutcome::Pending) => {
+                        tracing::info!("send_via_interconnect pending; waiting for ready");
+                    }
                     Err(e) => show_alert("失败", &format!("发送失败: {}", e)),
                 }
             });
@@ -401,7 +435,12 @@ fn days_to_api_segment(days: u32) -> &'static str {
 
 
 
-async fn send_via_interconnect(data: &str) -> Result<(), String> {
+enum SendOutcome {
+    Sent,
+    Pending,
+}
+
+async fn send_via_interconnect(data: &str) -> Result<SendOutcome, String> {
     tracing::info!("send_via_interconnect start, data={}", data);
 
     let devices = psys_host::device::get_connected_device_list().await;
@@ -433,49 +472,42 @@ async fn send_via_interconnect(data: &str) -> Result<(), String> {
     }
 
     tracing::info!("ensuring interconnect is registered for device: {}", device_addr);
-    let _ = register::register_interconnect_recv(&device_addr, pkg_name).await;
+    let reg_result = register::register_interconnect_recv(&device_addr, pkg_name).await;
+    tracing::info!("register_interconnect_recv result: {:?}", reg_result);
+    if reg_result.is_err() {
+        return Err("register_interconnect_recv failed".to_string());
+    }
     tracing::info!("register completed");
 
     tracing::info!("launching quick app before send...");
     ensure_quick_app_launched(&device_addr, pkg_name, "/index").await?;
 
-    tracing::info!("starting handshake loop...");
-    LAST_READY_TS_MS.store(0, Ordering::SeqCst);
-    let ready = perform_handshake(&device_addr, pkg_name).await?;
-    if !ready {
-        return Err("握手失败：设备未响应".to_string());
-    }
-
-    let data_str = data.to_string();
-
-    tracing::info!("calling interconnect::send_qaic_message...");
-    interconnect::send_qaic_message(&device_addr, pkg_name, &data_str)
-        .await
-        .map_err(|e| format!("{:?}", e))?;
-
-    tracing::info!("send_qaic_message completed");
-
-    Ok(())
-}
-
-async fn perform_handshake(device_addr: &str, pkg_name: &str) -> Result<bool, String> {
-    let max_attempts = 15;
-    for attempt in 0..max_attempts {
-        let last_before = LAST_READY_TS_MS.load(Ordering::SeqCst);
-        tracing::info!("handshake attempt {}", attempt + 1);
-        interconnect::send_qaic_message(device_addr, pkg_name, "start")
+    let last_ready = LAST_READY_TS_MS.load(Ordering::SeqCst);
+    let now = now_ms();
+    if last_ready > 0 && now.saturating_sub(last_ready) <= 5000 {
+        let data_str = data.to_string();
+        tracing::info!("ready recently seen, sending immediately");
+        interconnect::send_qaic_message(&device_addr, pkg_name, &data_str)
             .await
             .map_err(|e| format!("{:?}", e))?;
-
-        for _ in 0..12 {
-            if LAST_READY_TS_MS.load(Ordering::SeqCst) > last_before {
-                tracing::info!("handshake ready received");
-                return Ok(true);
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        tracing::info!("send_qaic_message completed");
+        return Ok(SendOutcome::Sent);
     }
-    Ok(false)
+
+    // Queue the payload and wait for ready via interconnect message callback.
+    {
+        let mut slot = pending_send().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        *slot = Some(PendingSend {
+            device_addr: device_addr.clone(),
+            pkg_name: pkg_name.to_string(),
+            data: data.to_string(),
+        });
+    }
+
+    tracing::info!("sending start message and waiting for ready...");
+    start_handshake_loop(device_addr.clone(), pkg_name.to_string());
+
+    Ok(SendOutcome::Pending)
 }
 
 fn now_ms() -> u64 {
@@ -483,6 +515,108 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn extract_interconnect_fields(payload: &str) -> (Option<String>, Option<String>, Option<String>) {
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(payload) {
+        let addr = json.get("addr").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let pkg = json.get("pkgName").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let payload_text = json
+            .get("payloadText")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        return (addr, pkg, payload_text);
+    }
+    (None, None, None)
+}
+
+fn try_send_pending(addr: String, pkg: String) {
+    tracing::info!("try_send_pending called: addr={}, pkg={}", addr, pkg);
+    let pending = {
+        let mut slot = pending_send().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        match slot.as_ref() {
+            Some(item) => {
+                tracing::info!(
+                    "pending slot exists: addr={}, pkg={}, data_len={}",
+                    item.device_addr,
+                    item.pkg_name,
+                    item.data.len()
+                );
+                if item.device_addr == addr && item.pkg_name == pkg {
+                    slot.take()
+                } else {
+                    tracing::warn!("pending slot mismatch, skip send");
+                    None
+                }
+            }
+            None => {
+                tracing::warn!("pending slot empty, nothing to send");
+                None
+            }
+        }
+    };
+
+    let Some(pending) = pending else {
+        return;
+    };
+
+    tracing::info!(
+        "sending pending payload: addr={}, pkg={}, data_len={}",
+        pending.device_addr,
+        pending.pkg_name,
+        pending.data.len()
+    );
+    wit_bindgen::block_on(async move {
+        let send_result = interconnect::send_qaic_message(
+            &pending.device_addr,
+            &pending.pkg_name,
+            &pending.data,
+        )
+        .await;
+
+        match send_result {
+            Ok(_) => {
+                tracing::info!("pending send completed");
+                HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
+                show_alert("成功", "发送成功");
+            }
+            Err(e) => {
+                tracing::error!("pending send failed: {:?}", e);
+                HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
+                show_alert("失败", &format!("发送失败: {:?}", e));
+            }
+        }
+    });
+}
+
+fn start_handshake_loop(device_addr: String, pkg_name: String) {
+    if HANDSHAKE_RUNNING.swap(true, Ordering::SeqCst) {
+        tracing::info!("handshake loop already running");
+        return;
+    }
+
+    wit_bindgen::spawn(async move {
+        let mut last_seen = LAST_READY_TS_MS.load(Ordering::SeqCst);
+        for attempt in 0..15 {
+            tracing::info!("handshake attempt {}", attempt + 1);
+            let start_result = interconnect::send_qaic_message(&device_addr, &pkg_name, "start").await;
+            tracing::info!("send start result: {:?}", start_result);
+
+            for _ in 0..12 {
+                let current = LAST_READY_TS_MS.load(Ordering::SeqCst);
+                if current > last_seen {
+                    tracing::info!("handshake ready received in loop");
+                    HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
+                    return;
+                }
+                last_seen = current;
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+
+        tracing::warn!("handshake loop exhausted without ready");
+        HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
+    });
 }
 
 async fn check_quick_app_installed(device_addr: &str, pkg_name: &str) -> Result<bool, String> {
