@@ -3,6 +3,24 @@ use crate::astrobox::psys_host::ui;
 use super::state::*;
 use super::event_handler::*;
 
+fn is_hovered(event_id: &str) -> bool {
+    let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
+    state.hovered_id.as_deref() == Some(event_id)
+}
+
+fn is_pressed(event_id: &str) -> bool {
+    let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
+    state.pressed_id.as_deref() == Some(event_id)
+}
+
+fn attach_hover_press(mut el: ui::Element, event_id: &str) -> ui::Element {
+    el = el
+        .on(ui::Event::MouseEnter, &format!("{}{}", HOVER_ENTER_PREFIX, event_id))
+        .on(ui::Event::MouseLeave, &format!("{}{}", HOVER_LEAVE_PREFIX, event_id))
+        .on(ui::Event::PointerDown, &format!("{}{}", PRESS_DOWN_PREFIX, event_id))
+        .on(ui::Event::PointerUp, &format!("{}{}", PRESS_UP_PREFIX, event_id));
+    el
+}
 pub fn render_main_ui(element_id: &str) {
     {
         let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -422,17 +440,36 @@ fn build_round_icon_button(icon_svg: String, event_id: &str) -> ui::Element {
         .height(18)
         .text_color("#FFFFFF");
 
-    ui::Element::new(ui::ElementType::Button, None)
+    let is_hovered = is_hovered(event_id);
+    let is_pressed = is_pressed(event_id);
+    let bg = if is_pressed {
+        "#3A3A3C"
+    } else if is_hovered {
+        "#333333"
+    } else {
+        "#2A2A2A"
+    };
+
+    let inner = ui::Element::new(ui::ElementType::Button, None)
         .without_default_styles()
         .on(ui::Event::Click, event_id)
         .width(36)
         .height(36)
-        .radius(999)
-        .bg("#2A2A2A")
+        .bg("transparent")
         .flex()
         .align_center()
         .justify_center()
-        .child(icon)
+        .child(icon);
+
+    let btn = ui::Element::new(ui::ElementType::Div, None)
+        .width(36)
+        .height(36)
+        .radius(999)
+        .bg(bg)
+        .transition("all 0.3s ease")
+        .child(inner);
+
+    attach_hover_press(btn, event_id)
 }
 
 fn back_target_svg() -> String {
@@ -573,16 +610,36 @@ fn build_days_row(state: &UiState) -> ui::Element {
 
     for (i, day) in options.iter().enumerate() {
         let is_active = *day == state.selected_days;
-        let btn = ui::Element::new(ui::ElementType::Button, Some(&format!("{}天", day)))
+        let event_id = format!("{}{}", SELECT_DAYS_PREFIX, day);
+        let is_hovered = is_hovered(&event_id);
+        let is_pressed = is_pressed(&event_id);
+        let base_bg = if is_active { "#2A2A2A" } else { "#1E1E1F" };
+        let hover_bg = if is_active { "#333333" } else { "#2A2A2D" };
+        let pressed_bg = if is_active { "#3A3A3C" } else { "#252527" };
+        let bg = if is_pressed {
+            pressed_bg
+        } else if is_hovered {
+            hover_bg
+        } else {
+            base_bg
+        };
+
+        let inner = ui::Element::new(ui::ElementType::Button, Some(&format!("{}天", day)))
             .without_default_styles()
-            .on(ui::Event::Click, &format!("{}{}", SELECT_DAYS_PREFIX, day))
-            .radius(999)
+            .on(ui::Event::Click, &event_id)
             .padding_top(8)
             .padding_bottom(8)
             .padding_left(16)
             .padding_right(16)
-            .bg(if is_active { "#2A2A2A" } else { "#1E1E1F" })
+            .bg("transparent")
             .text_color(if is_active { "#FFFFFF" } else { "#BBBBBB" });
+
+        let btn = ui::Element::new(ui::ElementType::Div, None)
+            .radius(999)
+            .bg(bg)
+            .transition("all 0.3s ease")
+            .child(inner);
+        let btn = attach_hover_press(btn, &event_id);
 
         row = row.child(btn);
         if i < options.len() - 1 {
@@ -627,15 +684,36 @@ fn build_eye_toggle_button(_label: &str, is_open: bool, event_id: &str) -> ui::E
         .width(16)
         .height(16);
 
-    ui::Element::new(ui::ElementType::Button, None)
+    let is_hovered = is_hovered(event_id);
+    let is_pressed = is_pressed(event_id);
+    let bg = if is_pressed {
+        "#252527"
+    } else if is_hovered {
+        "#2A2A2D"
+    } else {
+        "transparent"
+    };
+
+    let inner = ui::Element::new(ui::ElementType::Button, None)
         .without_default_styles()
         .on(ui::Event::Click, event_id)
         .width(ICON_SIZE)
         .height(ICON_SIZE)
+        .bg("transparent")
         .flex()
         .justify_center()
         .align_center()
-        .child(icon)
+        .child(icon);
+
+    let btn = ui::Element::new(ui::ElementType::Div, None)
+        .width(ICON_SIZE)
+        .height(ICON_SIZE)
+        .radius(999)
+        .bg(bg)
+        .transition("all 0.3s ease")
+        .child(inner);
+
+    attach_hover_press(btn, event_id)
 }
 
 fn build_switch(is_on: bool, event_id: &str) -> ui::Element {
@@ -649,12 +727,33 @@ fn build_switch(is_on: bool, event_id: &str) -> ui::Element {
         .width(SWITCH_W)
         .height(SWITCH_H);
 
-    ui::Element::new(ui::ElementType::Button, None)
+    let is_hovered = is_hovered(event_id);
+    let is_pressed = is_pressed(event_id);
+    let bg = if is_pressed {
+        "#252527"
+    } else if is_hovered {
+        "#2A2A2D"
+    } else {
+        "transparent"
+    };
+
+    let inner = ui::Element::new(ui::ElementType::Button, None)
         .without_default_styles()
         .on(ui::Event::Click, event_id)
         .width(SWITCH_W)
         .height(SWITCH_H)
-        .child(icon)
+        .bg("transparent")
+        .child(icon);
+
+    let btn = ui::Element::new(ui::ElementType::Div, None)
+        .width(SWITCH_W)
+        .height(SWITCH_H)
+        .radius(999)
+        .bg(bg)
+        .transition("all 0.3s ease")
+        .child(inner);
+
+    attach_hover_press(btn, event_id)
 }
 
 fn build_settings_card(
@@ -664,6 +763,23 @@ fn build_settings_card(
     right: Option<ui::Element>,
     click_event: Option<&str>,
 ) -> ui::Element {
+    let (is_hovered, is_pressed) = click_event
+        .and_then(|event_id| {
+            let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let hovered = state.hovered_id.as_deref().map(|id| id == event_id).unwrap_or(false);
+            let pressed = state.pressed_id.as_deref().map(|id| id == event_id).unwrap_or(false);
+            Some((hovered, pressed))
+        })
+        .unwrap_or((false, false));
+
+    let bg_color = if is_pressed {
+        "#252527"
+    } else if is_hovered {
+        "#2A2A2D"
+    } else {
+        "#1E1E1F"
+    };
+
     let icon = ui::Element::new(ui::ElementType::Svg, Some(&icon_svg))
         .width(24)
         .height(24)
@@ -693,20 +809,34 @@ fn build_settings_card(
         text_col = text_col.child(desc_el);
     }
 
-    let mut row = ui::Element::new(ui::ElementType::Div, None)
+    let mut inner_row = {
+        let base = ui::Element::new(
+            if click_event.is_some() {
+                ui::ElementType::Button
+            } else {
+                ui::ElementType::Div
+            },
+            None,
+        )
         .flex()
         .flex_direction(ui::FlexDirection::Row)
         .align_center()
         .width_full()
-        .bg("#1E1E1F")
-        .radius(24)
         .padding_left(12)
         .padding_right(12)
         .padding_top(10)
         .padding_bottom(10)
+        .bg("transparent")
         .child(icon_wrap)
         .child(ui::Element::new(ui::ElementType::Span, None).width(10))
         .child(text_col);
+
+        if let Some(event_id) = click_event {
+            base.without_default_styles().on(ui::Event::Click, event_id)
+        } else {
+            base
+        }
+    };
 
     if let Some(right_el) = right {
         let right_wrap = ui::Element::new(ui::ElementType::Div, None)
@@ -714,11 +844,19 @@ fn build_settings_card(
             .align_center()
             .justify_end()
             .child(right_el);
-        row = row.child(right_wrap);
+        inner_row = inner_row.child(right_wrap);
     }
 
+    let mut row = ui::Element::new(ui::ElementType::Div, None)
+        .flex()
+        .width_full()
+        .bg(bg_color)
+        .radius(24)
+        .transition("all 0.3s ease")
+        .child(inner_row);
+
     if let Some(event_id) = click_event {
-        row = row.on(ui::Event::Click, event_id);
+        row = attach_hover_press(row, event_id);
     }
 
     row
@@ -795,7 +933,20 @@ fn build_tab_button(label: &str, icon_svg: String, is_active: bool, event_id: &s
     let text = ui::Element::new(ui::ElementType::Span, Some(label))
         .size(14);
 
-    ui::Element::new(ui::ElementType::Button, None)
+    let is_hovered = is_hovered(event_id);
+    let is_pressed = is_pressed(event_id);
+    let base_bg = if is_active { "#2A2A2A" } else { "#1E1E1F" };
+    let hover_bg = if is_active { "#333333" } else { "#2A2A2D" };
+    let pressed_bg = if is_active { "#3A3A3C" } else { "#252527" };
+    let bg = if is_pressed {
+        pressed_bg
+    } else if is_hovered {
+        hover_bg
+    } else {
+        base_bg
+    };
+
+    let inner = ui::Element::new(ui::ElementType::Button, None)
         .without_default_styles()
         .on(ui::Event::Click, event_id)
         .radius(999)
@@ -803,13 +954,21 @@ fn build_tab_button(label: &str, icon_svg: String, is_active: bool, event_id: &s
         .padding_bottom(10)
         .padding_left(14)
         .padding_right(14)
-        .bg(if is_active { "#2A2A2A" } else { "#1E1E1F" })
+        .bg("transparent")
         .text_color(if is_active { "#FFFFFF" } else { "#BBBBBB" })
         .flex()
         .align_center()
         .child(icon)
         .child(ui::Element::new(ui::ElementType::Span, None).width(5))
-        .child(text)
+        .child(text);
+
+    let btn = ui::Element::new(ui::ElementType::Div, None)
+        .radius(999)
+        .bg(bg)
+        .transition("all 0.3s ease")
+        .child(inner);
+
+    attach_hover_press(btn, event_id)
 }
 
 fn build_icon_text_button_full(label: &str, icon_svg: String, event_id: &str) -> ui::Element {
@@ -820,18 +979,37 @@ fn build_icon_text_button_full(label: &str, icon_svg: String, event_id: &str) ->
     let text = ui::Element::new(ui::ElementType::Span, Some(label))
         .size(14);
 
-    ui::Element::new(ui::ElementType::Button, None)
+    let is_hovered = is_hovered(event_id);
+    let is_pressed = is_pressed(event_id);
+    let bg = if is_pressed {
+        "#3A3A3C"
+    } else if is_hovered {
+        "#333333"
+    } else {
+        "#2A2A2A"
+    };
+
+    let inner = ui::Element::new(ui::ElementType::Button, None)
         .without_default_styles()
         .on(ui::Event::Click, event_id)
         .radius(18)
         .padding(14)
-        .bg("#2A2A2A")
+        .bg("transparent")
         .width_full()
         .flex()
         .align_center()
         .child(icon)
         .child(ui::Element::new(ui::ElementType::Span, None).width(6))
-        .child(text)
+        .child(text);
+
+    let btn = ui::Element::new(ui::ElementType::Div, None)
+        .radius(18)
+        .bg(bg)
+        .width_full()
+        .transition("all 0.3s ease")
+        .child(inner);
+
+    attach_hover_press(btn, event_id)
 }
 
 fn build_icon_text_button_inline(label: &str, icon_svg: String, event_id: &str) -> ui::Element {
@@ -842,7 +1020,17 @@ fn build_icon_text_button_inline(label: &str, icon_svg: String, event_id: &str) 
     let text = ui::Element::new(ui::ElementType::Span, Some(label))
         .size(14);
 
-    ui::Element::new(ui::ElementType::Button, None)
+    let is_hovered = is_hovered(event_id);
+    let is_pressed = is_pressed(event_id);
+    let bg = if is_pressed {
+        "#3A3A3C"
+    } else if is_hovered {
+        "#333333"
+    } else {
+        "#2A2A2A"
+    };
+
+    let inner = ui::Element::new(ui::ElementType::Button, None)
         .without_default_styles()
         .on(ui::Event::Click, event_id)
         .radius(18)
@@ -850,12 +1038,20 @@ fn build_icon_text_button_inline(label: &str, icon_svg: String, event_id: &str) 
         .padding_bottom(14)
         .padding_left(20)
         .padding_right(20)
-        .bg("#2A2A2A")
+        .bg("transparent")
         .flex()
         .align_center()
         .child(icon)
         .child(ui::Element::new(ui::ElementType::Span, None).width(6))
-        .child(text)
+        .child(text);
+
+    let btn = ui::Element::new(ui::ElementType::Div, None)
+        .radius(18)
+        .bg(bg)
+        .transition("all 0.3s ease")
+        .child(inner);
+
+    attach_hover_press(btn, event_id)
 }
 
 fn build_search_inline_button(event_id: &str) -> ui::Element {
@@ -863,19 +1059,39 @@ fn build_search_inline_button(event_id: &str) -> ui::Element {
         .width(16)
         .height(16);
 
-    ui::Element::new(ui::ElementType::Button, None)
+    let is_hovered = is_hovered(event_id);
+    let is_pressed = is_pressed(event_id);
+    let bg = if is_pressed {
+        "#3A3A3C"
+    } else if is_hovered {
+        "#333333"
+    } else {
+        "#2A2A2A"
+    };
+
+    let inner = ui::Element::new(ui::ElementType::Button, None)
         .without_default_styles()
         .on(ui::Event::Click, event_id)
         .radius(18)
         .height(INPUT_HEIGHT)
         .padding_left(10)
         .padding_right(10)
-        .bg("#2A2A2A")
+        .bg("transparent")
         .width(44)
         .flex()
         .align_center()
         .justify_center()
-        .child(icon)
+        .child(icon);
+
+    let btn = ui::Element::new(ui::ElementType::Div, None)
+        .radius(18)
+        .height(INPUT_HEIGHT)
+        .width(44)
+        .bg(bg)
+        .transition("all 0.3s ease")
+        .child(inner);
+
+    attach_hover_press(btn, event_id)
 }
 
 fn build_location_chip(label: &str, icon_svg: String, event_id: &str) -> ui::Element {
@@ -886,7 +1102,17 @@ fn build_location_chip(label: &str, icon_svg: String, event_id: &str) -> ui::Ele
     let text = ui::Element::new(ui::ElementType::Span, Some(label))
         .size(14);
 
-    ui::Element::new(ui::ElementType::Button, None)
+    let is_hovered = is_hovered(event_id);
+    let is_pressed = is_pressed(event_id);
+    let bg = if is_pressed {
+        "#252527"
+    } else if is_hovered {
+        "#2A2A2D"
+    } else {
+        "#1E1E1F"
+    };
+
+    let inner = ui::Element::new(ui::ElementType::Button, None)
         .without_default_styles()
         .on(ui::Event::Click, event_id)
         .radius(18)
@@ -894,13 +1120,21 @@ fn build_location_chip(label: &str, icon_svg: String, event_id: &str) -> ui::Ele
         .padding_bottom(8)
         .padding_left(12)
         .padding_right(12)
-        .bg("#1E1E1F")
+        .bg("transparent")
         .text_color("#FFFFFF")
         .flex()
         .align_center()
         .child(icon)
         .child(ui::Element::new(ui::ElementType::Span, None).width(6))
-        .child(text)
+        .child(text);
+
+    let btn = ui::Element::new(ui::ElementType::Div, None)
+        .radius(18)
+        .bg(bg)
+        .transition("all 0.3s ease")
+        .child(inner);
+
+    attach_hover_press(btn, event_id)
 }
 
 fn search_svg() -> String {

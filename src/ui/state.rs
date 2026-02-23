@@ -21,6 +21,8 @@ pub struct UiState {
     pub search_results: Vec<LocationOption>,
     pub selected_location_id: String,
     pub selected_location_name: String,
+    pub hovered_id: Option<String>,
+    pub pressed_id: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -65,6 +67,8 @@ pub fn ui_state() -> &'static RwLock<UiState> {
             search_results: Vec::new(),
             selected_location_id: String::new(),
             selected_location_name: String::new(),
+            hovered_id: None,
+            pressed_id: None,
         })
     })
 }

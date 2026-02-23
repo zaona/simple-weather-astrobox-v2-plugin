@@ -38,6 +38,10 @@ pub const SEARCH_BUTTON_EVENT: &str = "search_button";
 pub const SEARCH_INPUT_SUBMIT_EVENT: &str = "search_input_submit";
 pub const SELECT_LOCATION_PREFIX: &str = "select_location:";
 pub const SELECT_DAYS_PREFIX: &str = "select_days:";
+pub const HOVER_ENTER_PREFIX: &str = "hover_enter:";
+pub const HOVER_LEAVE_PREFIX: &str = "hover_leave:";
+pub const PRESS_DOWN_PREFIX: &str = "press_down:";
+pub const PRESS_UP_PREFIX: &str = "press_up:";
 
 
 static LAST_READY_TS_MS: AtomicU64 = AtomicU64::new(0);
@@ -88,6 +92,71 @@ pub fn handle_timer_payload(payload: &str) {
 
 pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::event::Event, event_id: &str, event_payload: &str) {
     tracing::info!("UI Event: type={:?}, id={}, payload={}", event_type, event_id, event_payload);
+
+    if let Some(target) = event_id.strip_prefix(HOVER_ENTER_PREFIX) {
+        let should_rerender = {
+            let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if state.hovered_id.as_deref() != Some(target) {
+                state.hovered_id = Some(target.to_string());
+                true
+            } else {
+                false
+            }
+        };
+        if should_rerender {
+            crate::ui::build::rerender_main_ui();
+        }
+        return;
+    }
+
+    if let Some(target) = event_id.strip_prefix(HOVER_LEAVE_PREFIX) {
+        let should_rerender = {
+            let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if state.hovered_id.as_deref() == Some(target) {
+                state.hovered_id = None;
+                state.pressed_id = None;
+                true
+            } else {
+                false
+            }
+        };
+        if should_rerender {
+            crate::ui::build::rerender_main_ui();
+        }
+        return;
+    }
+
+    if let Some(target) = event_id.strip_prefix(PRESS_DOWN_PREFIX) {
+        let should_rerender = {
+            let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if state.pressed_id.as_deref() != Some(target) {
+                state.pressed_id = Some(target.to_string());
+                true
+            } else {
+                false
+            }
+        };
+        if should_rerender {
+            crate::ui::build::rerender_main_ui();
+        }
+        return;
+    }
+
+    if let Some(target) = event_id.strip_prefix(PRESS_UP_PREFIX) {
+        let should_rerender = {
+            let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if state.pressed_id.as_deref() == Some(target) {
+                state.pressed_id = None;
+                true
+            } else {
+                false
+            }
+        };
+        if should_rerender {
+            crate::ui::build::rerender_main_ui();
+        }
+        return;
+    }
 
     match event_id {
         INPUT_CHANGE_EVENT => {
