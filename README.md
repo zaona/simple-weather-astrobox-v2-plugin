@@ -47,3 +47,11 @@ python scripts/build_dist.py --release --package
 ```
 
 构建完成后，生成的 ABP 文件位于 `dist` 目录。
+
+### 开发命令
+
+```bash
+python scripts/build_dist.py --dev
+```
+
+我在开发的时候输入上面两个命令了114514遍，所以有了这个的开发命令。一个单命令快捷参数 --dev，相当于“构建 + 打包”，默认走 release。

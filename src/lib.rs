@@ -106,7 +106,17 @@ impl lifecycle::Guest for MyPlugin {
     #[allow(async_fn_in_trait)]
     fn on_load() -> () {
         logger::init();
-        tracing::info!("BUILD_ID=2026-02-24T02:55:00Z");
+        let build_time = option_env!("AB_BUILD_TIME").unwrap_or("unknown");
+        let build_user = option_env!("AB_BUILD_USER").unwrap_or("unknown");
+        let build_hash = option_env!("AB_BUILD_GIT_HASH").unwrap_or("unknown");
+        let build_branch = option_env!("AB_BUILD_GIT_BRANCH").unwrap_or("unknown");
+        tracing::info!(
+            "BUILD_INFO time={} user={} branch={} hash={}",
+            build_time,
+            build_user,
+            build_branch,
+            build_hash
+        );
         tracing::info!("Simple Interconnect Plugin Loaded!");
 
         // 异步操作：获取设备列表并注册所有需要的服务

@@ -5,12 +5,14 @@ import shutil
 import subprocess
 import sys
 import zipfile
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 
-def run_cargo_build(root_dir, cargo_args):
+def run_cargo_build(root_dir, cargo_args, env):
     cmd = ["cargo", "build", *cargo_args]
-    result = subprocess.run(cmd, cwd=root_dir)
+    result = subprocess.run(cmd, cwd=root_dir, env=env)
     if result.returncode != 0:
         sys.exit(result.returncode)
 
@@ -124,6 +126,38 @@ def package_dist(dist_dir, output_path):
         for path in files:
             archive.write(path, path.relative_to(dist_dir))
 
+def get_git_output(root_dir, args):
+    result = subprocess.run(
+        ["git", *args],
+        cwd=root_dir,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return ""
+    return (result.stdout or "").strip()
+
+def collect_build_info(root_dir):
+    build_time = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    git_user = get_git_output(root_dir, ["config", "user.name"])
+    git_email = get_git_output(root_dir, ["config", "user.email"])
+    git_hash = get_git_output(root_dir, ["rev-parse", "HEAD"])
+    git_branch = get_git_output(root_dir, ["rev-parse", "--abbrev-ref", "HEAD"])
+
+    if not git_user:
+        git_user = os.environ.get("USER") or os.environ.get("LOGNAME") or "unknown"
+    if not git_hash:
+        git_hash = "unknown"
+    if not git_branch:
+        git_branch = "unknown"
+
+    return {
+        "AB_BUILD_TIME": build_time,
+        "AB_BUILD_USER": git_user,
+        "AB_BUILD_GIT_HASH": git_hash,
+        "AB_BUILD_GIT_BRANCH": git_branch,
+    }
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -137,10 +171,20 @@ def main():
         action="store_true",
         help="Package dist into <name>.abp",
     )
+    parser.add_argument(
+        "--dev",
+        action="store_true",
+        help="Build (release by default) and package in one command",
+    )
     args, extra = parser.parse_known_args()
 
     cargo_args = []
     profile = "debug"
+
+    if args.dev:
+        args.package = True
+        if not args.profile and not args.release:
+            args.release = True
 
     if args.profile:
         cargo_args.extend(["--profile", args.profile])
@@ -167,7 +211,9 @@ def main():
     icon = str(manifest.get("icon") or "")
     additional = manifest.get("additional_files") or []
 
-    run_cargo_build(root_dir, cargo_args)
+    env = os.environ.copy()
+    env.update(collect_build_info(root_dir))
+    run_cargo_build(root_dir, cargo_args, env)
 
     metadata = load_cargo_metadata(root_dir)
     target_dir = Path(metadata.get("target_directory", root_dir / "target"))
