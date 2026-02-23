@@ -21,6 +21,8 @@ pub struct UiState {
     pub search_results: Vec<LocationOption>,
     pub selected_location_id: String,
     pub selected_location_name: String,
+    pub last_sync_time_ms: u64,
+    pub last_sync_location: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -65,6 +67,8 @@ pub fn ui_state() -> &'static RwLock<UiState> {
             search_results: Vec::new(),
             selected_location_id: String::new(),
             selected_location_name: String::new(),
+            last_sync_time_ms: 0,
+            last_sync_location: String::new(),
         })
     })
 }
