@@ -1,4 +1,5 @@
 use wit_bindgen::FutureReader;
+use serde_json;
 
 use crate::exports::astrobox::psys_plugin::{event, lifecycle};
 
@@ -25,6 +26,19 @@ impl event::Guest for MyPlugin {
         match event_type {
             event::EventType::InterconnectMessage => {
                 ui::handle_interconnect_message(&event_payload);
+            }
+            event::EventType::Timer => {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&event_payload) {
+                    if let Some(payload) = json.get("payload").and_then(|v| v.as_str()) {
+                        crate::ui::event_handler::handle_timer_payload(payload);
+                    } else {
+                        tracing::info!("Timer event without payload field: {}", event_payload);
+                    }
+                } else if event_payload == "pending_send_timeout" {
+                    crate::ui::event_handler::handle_timer_payload(&event_payload);
+                } else {
+                    tracing::info!("Timer event payload not JSON: {}", event_payload);
+                }
             }
             event::EventType::DeeplinkAction => {
                 // 处理deeplink数据
@@ -92,7 +106,7 @@ impl lifecycle::Guest for MyPlugin {
     #[allow(async_fn_in_trait)]
     fn on_load() -> () {
         logger::init();
-        tracing::info!("BUILD_ID=2026-02-24T02:27:00Z");
+        tracing::info!("BUILD_ID=2026-02-24T02:55:00Z");
         tracing::info!("Simple Interconnect Plugin Loaded!");
 
         // 异步操作：获取设备列表并注册所有需要的服务

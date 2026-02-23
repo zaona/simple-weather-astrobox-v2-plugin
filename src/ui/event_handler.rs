@@ -2,6 +2,7 @@ use crate::astrobox::psys_host;
 use crate::astrobox::psys_host::interconnect;
 use crate::astrobox::psys_host::register;
 use crate::astrobox::psys_host::thirdpartyapp;
+use crate::astrobox::psys_host::timer;
 use crate::astrobox::psys_host::dialog;
 use url::Url;
 use std::io::Read;
@@ -41,6 +42,8 @@ pub const SELECT_DAYS_PREFIX: &str = "select_days:";
 
 static LAST_READY_TS_MS: AtomicU64 = AtomicU64::new(0);
 static HANDSHAKE_RUNNING: AtomicBool = AtomicBool::new(false);
+static PENDING_TIMER_ID: AtomicU64 = AtomicU64::new(0);
+const PENDING_SEND_TIMEOUT_MS: u64 = 1200;
 
 struct PendingSend {
     device_addr: String,
@@ -73,6 +76,13 @@ pub fn handle_interconnect_message(payload: &str) {
         if let (Some(addr), Some(pkg)) = (addr, pkg) {
             try_send_pending(addr, pkg);
         }
+    }
+}
+
+pub fn handle_timer_payload(payload: &str) {
+    if payload == "pending_send_timeout" {
+        tracing::info!("pending_send_timeout fired, trying to send pending");
+        try_send_pending_any();
     }
 }
 
@@ -504,6 +514,8 @@ async fn send_via_interconnect(data: &str) -> Result<SendOutcome, String> {
         });
     }
 
+    schedule_pending_timeout().await;
+
     tracing::info!("sending start message and waiting for ready...");
     start_handshake_loop(device_addr.clone(), pkg_name.to_string());
 
@@ -567,6 +579,7 @@ fn try_send_pending(addr: String, pkg: String) {
         pending.data.len()
     );
     wit_bindgen::block_on(async move {
+        clear_pending_timeout().await;
         let send_result = interconnect::send_qaic_message(
             &pending.device_addr,
             &pending.pkg_name,
@@ -589,6 +602,63 @@ fn try_send_pending(addr: String, pkg: String) {
     });
 }
 
+fn try_send_pending_any() {
+    let pending = {
+        let mut slot = pending_send().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        slot.take()
+    };
+
+    let Some(pending) = pending else {
+        tracing::warn!("pending slot empty, nothing to send");
+        return;
+    };
+
+    tracing::info!(
+        "sending pending payload (timeout): addr={}, pkg={}, data_len={}",
+        pending.device_addr,
+        pending.pkg_name,
+        pending.data.len()
+    );
+
+    wit_bindgen::block_on(async move {
+        clear_pending_timeout().await;
+        let send_result = interconnect::send_qaic_message(
+            &pending.device_addr,
+            &pending.pkg_name,
+            &pending.data,
+        )
+        .await;
+
+        match send_result {
+            Ok(_) => {
+                tracing::info!("pending send completed (timeout)");
+                HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
+                show_alert("成功", "发送成功");
+            }
+            Err(e) => {
+                tracing::error!("pending send failed (timeout): {:?}", e);
+                HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
+                show_alert("失败", &format!("发送失败: {:?}", e));
+            }
+        }
+    });
+}
+
+async fn schedule_pending_timeout() {
+    clear_pending_timeout().await;
+    let timer_id = timer::set_timeout(1200, "pending_send_timeout").await;
+    if timer_id != 0 {
+        PENDING_TIMER_ID.store(timer_id, Ordering::SeqCst);
+    }
+}
+
+async fn clear_pending_timeout() {
+    let old = PENDING_TIMER_ID.swap(0, Ordering::SeqCst);
+    if old != 0 {
+        let _ = timer::clear_timer(old).await;
+    }
+}
+
 fn start_handshake_loop(device_addr: String, pkg_name: String) {
     if HANDSHAKE_RUNNING.swap(true, Ordering::SeqCst) {
         tracing::info!("handshake loop already running");
@@ -597,7 +667,13 @@ fn start_handshake_loop(device_addr: String, pkg_name: String) {
 
     wit_bindgen::spawn(async move {
         let mut last_seen = LAST_READY_TS_MS.load(Ordering::SeqCst);
+        let start_ms = now_ms();
         for attempt in 0..15 {
+            if !pending_exists() {
+                tracing::info!("pending already sent, stopping handshake loop");
+                HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
+                return;
+            }
             tracing::info!("handshake attempt {}", attempt + 1);
             let start_result = interconnect::send_qaic_message(&device_addr, &pkg_name, "start").await;
             tracing::info!("send start result: {:?}", start_result);
@@ -611,12 +687,23 @@ fn start_handshake_loop(device_addr: String, pkg_name: String) {
                 }
                 last_seen = current;
                 std::thread::sleep(Duration::from_millis(50));
+                if now_ms().saturating_sub(start_ms) >= PENDING_SEND_TIMEOUT_MS && pending_exists() {
+                    tracing::info!("pending timeout reached, sending without ready");
+                    HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
+                    try_send_pending_any();
+                    return;
+                }
             }
         }
 
         tracing::warn!("handshake loop exhausted without ready");
         HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
     });
+}
+
+fn pending_exists() -> bool {
+    let slot = pending_send().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    slot.is_some()
 }
 
 async fn check_quick_app_installed(device_addr: &str, pkg_name: &str) -> Result<bool, String> {
