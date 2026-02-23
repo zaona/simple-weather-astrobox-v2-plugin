@@ -8,18 +8,39 @@ pub struct UiState {
     pub weather_data: String,
     pub deeplink_registered: bool, // 跟踪深度链接是否已注册
     pub current_tab: MainTab,
+    pub settings_page: SettingsPage,
     pub use_custom_api: bool,
     pub custom_api_host: String,
     pub custom_api_key: String,
     pub show_api_host: bool,
     pub show_api_key: bool,
     pub settings_loaded: bool,
+    pub advanced_mode: bool,
+    pub selected_days: u32,
+    pub search_query: String,
+    pub search_results: Vec<LocationOption>,
+    pub selected_location_id: String,
+    pub selected_location_name: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum MainTab {
     PasteData,
-    CustomApi,
+    Settings,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SettingsPage {
+    Main,
+    Api,
+}
+
+#[derive(Clone)]
+pub struct LocationOption {
+    pub id: String,
+    pub name: String,
+    pub adm1: String,
+    pub adm2: String,
 }
 
 static UI_STATE: OnceLock<RwLock<UiState>> = OnceLock::new();
@@ -31,12 +52,19 @@ pub fn ui_state() -> &'static RwLock<UiState> {
             weather_data: String::new(),
             deeplink_registered: false,
             current_tab: MainTab::PasteData,
+            settings_page: SettingsPage::Main,
             use_custom_api: false,
             custom_api_host: String::new(),
             custom_api_key: String::new(),
             show_api_host: false,
             show_api_key: false,
             settings_loaded: false,
+            advanced_mode: false,
+            selected_days: 3,
+            search_query: String::new(),
+            search_results: Vec::new(),
+            selected_location_id: String::new(),
+            selected_location_name: String::new(),
         })
     })
 }
@@ -46,6 +74,14 @@ struct StoredApiSettings {
     use_custom_api: bool,
     custom_api_host: String,
     custom_api_key: String,
+    #[serde(default)]
+    advanced_mode: bool,
+    #[serde(default)]
+    selected_days: u32,
+    #[serde(default)]
+    selected_location_id: String,
+    #[serde(default)]
+    selected_location_name: String,
 }
 
 pub fn load_api_settings_once() {
@@ -70,6 +106,10 @@ pub fn load_api_settings_once() {
                 state.use_custom_api = stored.use_custom_api;
                 state.custom_api_host = stored.custom_api_host;
                 state.custom_api_key = stored.custom_api_key;
+                state.advanced_mode = stored.advanced_mode;
+                state.selected_days = if stored.selected_days == 0 { 3 } else { stored.selected_days };
+                state.selected_location_id = stored.selected_location_id;
+                state.selected_location_name = stored.selected_location_name;
                 info!("loaded api settings from disk");
             }
             Err(e) => {
@@ -87,6 +127,27 @@ pub fn save_api_settings(use_custom_api: bool, host: &str, key: &str) -> Result<
         use_custom_api,
         custom_api_host: host.to_string(),
         custom_api_key: key.to_string(),
+        advanced_mode: false,
+        selected_days: 3,
+        selected_location_id: String::new(),
+        selected_location_name: String::new(),
+    };
+
+    let content = serde_json::to_string_pretty(&stored).map_err(|e| e.to_string())?;
+    std::fs::write(SETTINGS_FILE, content).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn save_all_settings() -> Result<(), String> {
+    let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let stored = StoredApiSettings {
+        use_custom_api: state.use_custom_api,
+        custom_api_host: state.custom_api_host.clone(),
+        custom_api_key: state.custom_api_key.clone(),
+        advanced_mode: state.advanced_mode,
+        selected_days: state.selected_days,
+        selected_location_id: state.selected_location_id.clone(),
+        selected_location_name: state.selected_location_name.clone(),
     };
 
     let content = serde_json::to_string_pretty(&stored).map_err(|e| e.to_string())?;

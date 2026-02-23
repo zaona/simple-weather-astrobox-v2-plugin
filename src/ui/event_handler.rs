@@ -3,7 +3,11 @@ use crate::astrobox::psys_host::interconnect;
 use crate::astrobox::psys_host::register;
 use crate::astrobox::psys_host::thirdpartyapp;
 use crate::astrobox::psys_host::dialog;
-use waki::Client;
+use url::Url;
+use std::io::Read;
+use flate2::read::GzDecoder;
+use waki::bindings::wasi::http::{outgoing_handler, types as http_types};
+use waki::bindings::wasi::io::streams::StreamError;
 use super::state::*;
 
 pub const INPUT_CHANGE_EVENT: &str = "input_change";
@@ -11,7 +15,7 @@ pub const SEND_BUTTON_EVENT: &str = "send_button";
 pub const OPEN_WEATHER_EVENT: &str = "open_weather";
 pub const OPEN_GUIDE_EVENT: &str = "open_guide";
 pub const TAB_PASTE_EVENT: &str = "tab_paste";
-pub const TAB_CUSTOM_API_EVENT: &str = "tab_custom_api";
+pub const TAB_SETTINGS_EVENT: &str = "tab_settings";
 pub const CUSTOM_API_HOST_CHANGE_EVENT: &str = "custom_api_host_change";
 pub const CUSTOM_API_KEY_CHANGE_EVENT: &str = "custom_api_key_change";
 pub const API_SAVE_TEST_EVENT: &str = "api_save_test";
@@ -19,6 +23,14 @@ pub const API_RESET_EVENT: &str = "api_reset";
 pub const API_HELP_EVENT: &str = "api_help";
 pub const TOGGLE_SHOW_API_HOST_EVENT: &str = "toggle_show_api_host";
 pub const TOGGLE_SHOW_API_KEY_EVENT: &str = "toggle_show_api_key";
+pub const OPEN_SETTINGS_API_EVENT: &str = "open_settings_api";
+pub const SETTINGS_BACK_EVENT: &str = "settings_back";
+pub const ADV_MODE_ON_EVENT: &str = "adv_mode_on";
+pub const ADV_MODE_OFF_EVENT: &str = "adv_mode_off";
+pub const SEARCH_INPUT_CHANGE_EVENT: &str = "search_input_change";
+pub const SEARCH_BUTTON_EVENT: &str = "search_button";
+pub const SELECT_LOCATION_PREFIX: &str = "select_location:";
+pub const SELECT_DAYS_PREFIX: &str = "select_days:";
 
 
 pub fn handle_interconnect_message(payload: &str) {
@@ -66,11 +78,11 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
                 crate::ui::build::rerender_main_ui();
             }
         }
-        TAB_CUSTOM_API_EVENT => {
+        TAB_SETTINGS_EVENT => {
             let should_rerender = {
                 let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
-                if state.current_tab != MainTab::CustomApi {
-                    state.current_tab = MainTab::CustomApi;
+                if state.current_tab != MainTab::Settings {
+                    state.current_tab = MainTab::Settings;
                     true
                 } else {
                     false
@@ -143,6 +155,64 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
         API_HELP_EVENT => {
             open_api_help_page();
         }
+        OPEN_SETTINGS_API_EVENT => {
+            let should_rerender = {
+                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.settings_page = SettingsPage::Api;
+                true
+            };
+            if should_rerender {
+                crate::ui::build::rerender_main_ui();
+            }
+        }
+        SETTINGS_BACK_EVENT => {
+            let should_rerender = {
+                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.settings_page = SettingsPage::Main;
+                true
+            };
+            if should_rerender {
+                crate::ui::build::rerender_main_ui();
+            }
+        }
+        ADV_MODE_ON_EVENT => {
+            let should_rerender = {
+                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+                if !state.advanced_mode {
+                    state.advanced_mode = true;
+                    true
+                } else {
+                    false
+                }
+            };
+            if should_rerender {
+                let _ = crate::ui::state::save_all_settings();
+                crate::ui::build::rerender_main_ui();
+            }
+        }
+        ADV_MODE_OFF_EVENT => {
+            let should_rerender = {
+                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+                if state.advanced_mode {
+                    state.advanced_mode = false;
+                    true
+                } else {
+                    false
+                }
+            };
+            if should_rerender {
+                let _ = crate::ui::state::save_all_settings();
+                crate::ui::build::rerender_main_ui();
+            }
+        }
+        SEARCH_INPUT_CHANGE_EVENT => {
+            let parsed_value = parse_event_value(event_payload);
+            let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.search_query = parsed_value;
+        }
+        SEARCH_BUTTON_EVENT => {
+            search_locations();
+        }
         TOGGLE_SHOW_API_HOST_EVENT => {
             let should_rerender = {
                 let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -166,6 +236,21 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
 
         _ => {}
     }
+
+    if event_id.starts_with(SELECT_LOCATION_PREFIX) {
+        if let Some(idx_str) = event_id.strip_prefix(SELECT_LOCATION_PREFIX) {
+            if let Ok(idx) = idx_str.parse::<usize>() {
+                select_location(idx);
+            }
+        }
+    }
+    if event_id.starts_with(SELECT_DAYS_PREFIX) {
+        if let Some(day_str) = event_id.strip_prefix(SELECT_DAYS_PREFIX) {
+            if let Ok(day) = day_str.parse::<u32>() {
+                select_days(day);
+            }
+        }
+    }
 }
 
 fn parse_event_value(payload: &str) -> String {
@@ -185,6 +270,15 @@ fn parse_event_value(payload: &str) -> String {
 
 fn send_weather_data() {
     tracing::info!("send_weather_data called");
+
+    let advanced_mode = {
+        let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.advanced_mode
+    };
+    if advanced_mode {
+        send_weather_data_advanced();
+        return;
+    }
 
     let weather_data = {
         let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -220,6 +314,70 @@ fn send_weather_data() {
             }
         }
     });
+}
+
+fn send_weather_data_advanced() {
+    let (host, key, location_id, location_name, days, use_custom_api) = {
+        let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        (
+            state.custom_api_host.clone(),
+            state.custom_api_key.clone(),
+            state.selected_location_id.clone(),
+            state.selected_location_name.clone(),
+            state.selected_days,
+            state.use_custom_api,
+        )
+    };
+
+    if !use_custom_api {
+        show_alert("提示", "请先启用自定义API");
+        return;
+    }
+    if host.trim().is_empty() || key.trim().is_empty() {
+        show_alert("提示", "请先在设置中配置自定义API");
+        return;
+    }
+    if location_id.is_empty() {
+        show_alert("提示", "请先选择位置");
+        return;
+    }
+
+    let days_segment = days_to_api_segment(days);
+    let url = format!(
+        "https://{}/v7/weather/{}?location={}&key={}",
+        host.trim(),
+        days_segment,
+        location_id,
+        key.trim()
+    );
+    tracing::info!("advanced weather url={}", url);
+
+    match http_get_json(&url) {
+        Ok(mut json) => {
+            json["location"] = serde_json::Value::String(location_name);
+            let payload = json.to_string();
+            wit_bindgen::block_on(async move {
+                match send_via_interconnect(&payload).await {
+                    Ok(_) => show_alert("成功", "发送成功"),
+                    Err(e) => show_alert("失败", &format!("发送失败: {}", e)),
+                }
+            });
+        }
+        Err(e) => {
+            show_alert("失败", &format!("获取天气失败: {}", e));
+        }
+    }
+}
+
+fn days_to_api_segment(days: u32) -> &'static str {
+    match days {
+        3 => "3d",
+        7 => "7d",
+        10 => "10d",
+        15 => "15d",
+        30 => "30d",
+        _ => "3d",
+    }
 }
 
 
@@ -384,7 +542,7 @@ fn save_and_test_custom_api() {
                 state.custom_api_host = host.trim().to_string();
                 state.custom_api_key = key.trim().to_string();
             }
-            if let Err(e) = crate::ui::state::save_api_settings(true, host.trim(), key.trim()) {
+            if let Err(e) = crate::ui::state::save_all_settings() {
                 show_alert("保存失败", &format!("写入配置失败: {}", e));
             } else {
                 show_alert("保存成功", "配置已保存并验证通过");
@@ -423,18 +581,239 @@ fn test_custom_api_connection(host: &str, key: &str) -> Result<(), String> {
     }
 
     let url = format!("https://{}/geo/v2/city/lookup?location=北京&key={}", host, key);
-    let client = Client::new();
+    tracing::info!("test_custom_api_connection url={}", url);
+    let (status_code, body) = http_get_bytes(&url)?;
+    tracing::info!(
+        "test_custom_api_connection status={}, body_len={}",
+        status_code,
+        body.len()
+    );
+    log_body_preview("test_custom_api_connection", &body);
 
-    let response = client.get(&url).send().map_err(|e| format!("{:?}", e))?;
-
-    let status_code = response.status_code();
     if status_code != 200 {
         return match status_code {
             401 => Err("API密钥无效或已过期".to_string()),
             403 => Err("访问被拒绝，请检查API权限".to_string()),
+            429 => Err("请求过于频繁，请稍后再试".to_string()),
             _ => Err(format!("API Error: {}", status_code)),
         };
     }
 
-    Ok(())
+    let body = maybe_decompress(body)?;
+    if body.is_empty() {
+        return Err("Empty response".to_string());
+    }
+    let json: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|e| format!("响应解析失败: {}", e))?;
+    if let Some(code) = json.get("code").and_then(|v| v.as_str()) {
+        if code == "200" {
+            Ok(())
+        } else {
+            Err(format!("API Error: {}", code))
+        }
+    } else {
+        Ok(())
+    }
+}
+
+fn search_locations() {
+    let (host, key, query, use_custom_api) = {
+        let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        (
+            state.custom_api_host.clone(),
+            state.custom_api_key.clone(),
+            state.search_query.clone(),
+            state.use_custom_api,
+        )
+    };
+
+    if !use_custom_api {
+        show_alert("提示", "请先启用自定义API");
+        return;
+    }
+    if host.trim().is_empty() || key.trim().is_empty() {
+        show_alert("提示", "请先在设置中配置自定义API");
+        return;
+    }
+    if query.trim().is_empty() {
+        show_alert("提示", "请输入城市名称");
+        return;
+    }
+
+    let base = format!("https://{}/geo/v2/city/lookup", host.trim());
+    let url = match Url::parse_with_params(&base, &[("location", query), ("key", key)]) {
+        Ok(u) => u.to_string(),
+        Err(e) => {
+            show_alert("错误", &format!("URL解析失败: {}", e));
+            return;
+        }
+    };
+
+    match http_get_json(&url) {
+        Ok(json) => {
+            let mut results: Vec<LocationOption> = Vec::new();
+            if let Some(list) = json.get("location").and_then(|v| v.as_array()) {
+                for item in list {
+                    let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let adm1 = item.get("adm1").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let adm2 = item.get("adm2").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    if !id.is_empty() {
+                        results.push(LocationOption { id, name, adm1, adm2 });
+                    }
+                }
+            }
+            {
+                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.search_results = results;
+            }
+            crate::ui::build::rerender_main_ui();
+        }
+        Err(e) => {
+            show_alert("失败", &format!("搜索失败: {}", e));
+        }
+    }
+}
+
+fn select_location(idx: usize) {
+    let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let picked = state.search_results.get(idx).cloned();
+    if let Some(item) = picked {
+        state.selected_location_id = item.id;
+        state.selected_location_name = item.name;
+    }
+    drop(state);
+    let _ = crate::ui::state::save_all_settings();
+    crate::ui::build::rerender_main_ui();
+}
+
+fn select_days(day: u32) {
+    if day == 0 {
+        return;
+    }
+    let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+    state.selected_days = day;
+    drop(state);
+    let _ = crate::ui::state::save_all_settings();
+    crate::ui::build::rerender_main_ui();
+}
+
+fn http_get_json(url: &str) -> Result<serde_json::Value, String> {
+    tracing::info!("http_get_json url={}", url);
+    let (status, body) = http_get_bytes(url)?;
+    tracing::info!("http_get_json status={}, body_len={}", status, body.len());
+    log_body_preview("http_get_json", &body);
+    if status != 200 {
+        return Err(format!("HTTP {}", status));
+    }
+    let body = maybe_decompress(body)?;
+    if body.is_empty() {
+        return Err("Empty response".to_string());
+    }
+    serde_json::from_slice(&body).map_err(|e| format!("响应解析失败: {}", e))
+}
+
+fn http_get_bytes(url: &str) -> Result<(u16, Vec<u8>), String> {
+    tracing::info!("http_get_bytes url={}", url);
+    let url = Url::parse(url).map_err(|e| e.to_string())?;
+    let headers = http_types::Headers::from_list(&[])
+        .map_err(|e| format!("{:?}", e))?;
+    let req = http_types::OutgoingRequest::new(headers);
+
+    req.set_method(&http_types::Method::Get)
+        .map_err(|()| "failed to set method".to_string())?;
+
+    let scheme = match url.scheme() {
+        "https" => http_types::Scheme::Https,
+        _ => http_types::Scheme::Http,
+    };
+    req.set_scheme(Some(&scheme))
+        .map_err(|()| "failed to set scheme".to_string())?;
+
+    let authority = url.authority();
+    req.set_authority(Some(authority))
+        .map_err(|()| "failed to set authority".to_string())?;
+
+    let path = match url.query() {
+        Some(q) => format!("{}?{}", url.path(), q),
+        None => url.path().to_string(),
+    };
+    req.set_path_with_query(Some(&path))
+        .map_err(|()| "failed to set path".to_string())?;
+
+    let options = http_types::RequestOptions::new();
+    let outgoing_body = req
+        .body()
+        .map_err(|_| "outgoing request write failed".to_string())?;
+    http_types::OutgoingBody::finish(outgoing_body, None)
+        .map_err(|_| "finish body failed".to_string())?;
+
+    let future_response = outgoing_handler::handle(req, Some(options))
+        .map_err(|e| format!("{:?}", e))?;
+    let incoming_response = match future_response.get() {
+        Some(result) => result.map_err(|()| "response already taken".to_string())?,
+        None => {
+            let pollable = future_response.subscribe();
+            pollable.block();
+            future_response
+                .get()
+                .ok_or_else(|| "response not available".to_string())?
+                .map_err(|()| "response already taken".to_string())?
+        }
+    }
+    .map_err(|e| format!("{:?}", e))?;
+
+    let status = incoming_response.status();
+    tracing::info!("http_get_bytes status={}", status);
+    let incoming_body = incoming_response
+        .consume()
+        .map_err(|_| "missing body".to_string())?;
+    let input_stream = incoming_body
+        .stream()
+        .map_err(|_| "failed to open body stream".to_string())?;
+
+    let mut body = Vec::new();
+    loop {
+        match input_stream.blocking_read(1024 * 64) {
+            Ok(chunk) => {
+                if chunk.is_empty() {
+                    continue;
+                }
+                body.extend_from_slice(&chunk);
+            }
+            Err(StreamError::Closed) => break,
+            Err(e) => return Err(format!("read body failed: {:?}", e)),
+        }
+    }
+
+    Ok((status, body))
+}
+
+fn log_body_preview(tag: &str, body: &[u8]) {
+    if body.is_empty() {
+        tracing::info!("{} body_preview: <empty>", tag);
+        return;
+    }
+    let preview_len = body.len().min(200);
+    let preview = String::from_utf8_lossy(&body[..preview_len]);
+    let hex_len = body.len().min(64);
+    let mut hex = String::new();
+    for b in &body[..hex_len] {
+        hex.push_str(&format!("{:02x}", b));
+    }
+    tracing::info!("{} body_preview_utf8: {}", tag, preview);
+    tracing::info!("{} body_preview_hex: {}", tag, hex);
+}
+
+fn maybe_decompress(body: Vec<u8>) -> Result<Vec<u8>, String> {
+    if body.len() >= 2 && body[0] == 0x1f && body[1] == 0x8b {
+        tracing::info!("detected gzip body, decompressing...");
+        let mut decoder = GzDecoder::new(&body[..]);
+        let mut out = Vec::new();
+        decoder
+            .read_to_end(&mut out)
+            .map_err(|e| format!("gzip decompress failed: {}", e))?;
+        return Ok(out);
+    }
+    Ok(body)
 }
