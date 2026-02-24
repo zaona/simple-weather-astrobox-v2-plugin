@@ -37,6 +37,7 @@ pub const SEARCH_INPUT_CHANGE_EVENT: &str = "search_input_change";
 pub const SEARCH_BUTTON_EVENT: &str = "search_button";
 pub const SEARCH_INPUT_SUBMIT_EVENT: &str = "search_input_submit";
 pub const SELECT_LOCATION_PREFIX: &str = "select_location:";
+pub const SELECT_RECENT_PREFIX: &str = "select_recent:";
 pub const SELECT_DAYS_PREFIX: &str = "select_days:";
 
 
@@ -124,6 +125,7 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
                 }
             };
             if should_rerender {
+                resolve_recent_locations_if_needed();
                 crate::ui::build::rerender_main_ui();
             }
         }
@@ -241,6 +243,7 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
             };
             if should_rerender {
                 let _ = crate::ui::state::save_all_settings();
+                resolve_recent_locations_if_needed();
                 crate::ui::build::rerender_main_ui();
             }
         }
@@ -290,6 +293,13 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
         if let Some(idx_str) = event_id.strip_prefix(SELECT_LOCATION_PREFIX) {
             if let Ok(idx) = idx_str.parse::<usize>() {
                 select_location(idx);
+            }
+        }
+    }
+    if event_id.starts_with(SELECT_RECENT_PREFIX) {
+        if let Some(idx_str) = event_id.strip_prefix(SELECT_RECENT_PREFIX) {
+            if let Ok(idx) = idx_str.parse::<usize>() {
+                select_recent_location(idx);
             }
         }
     }
@@ -363,6 +373,7 @@ fn send_weather_data() {
         match send_via_interconnect(&data).await {
             Ok(SendOutcome::Sent) => {
                 tracing::info!("send_via_interconnect success");
+                record_recent_location_from_paste(&data);
                 show_alert("成功", "发送成功");
             }
             Ok(SendOutcome::Pending) => {
@@ -377,15 +388,20 @@ fn send_weather_data() {
 }
 
 fn send_weather_data_advanced() {
-    let (host, key, location_id, location_name, days, use_custom_api) = {
+    let (host, key, location_id, location_name, location_adm1, location_adm2, location_lat, location_lon, days, use_custom_api, selected_from_search) = {
         let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
         (
             state.custom_api_host.clone(),
             state.custom_api_key.clone(),
             state.selected_location_id.clone(),
             state.selected_location_name.clone(),
+            state.selected_location_adm1.clone(),
+            state.selected_location_adm2.clone(),
+            state.selected_location_lat.clone(),
+            state.selected_location_lon.clone(),
             state.selected_days,
             state.use_custom_api,
+            state.selected_from_search,
         )
     };
 
@@ -397,30 +413,55 @@ fn send_weather_data_advanced() {
         show_alert("提示", "请先在设置中配置自定义API");
         return;
     }
-    if location_id.is_empty() {
+    if location_id.is_empty() && (location_lat.is_empty() || location_lon.is_empty()) {
         show_alert("提示", "请先选择位置");
         return;
     }
 
+    let location_param = if !location_lon.is_empty() && !location_lat.is_empty() {
+        format!("{},{}", location_lon, location_lat)
+    } else {
+        location_id.clone()
+    };
     let days_segment = days_to_api_segment(days);
     let url = format!(
         "https://{}/v7/weather/{}?location={}&key={}",
         host.trim(),
         days_segment,
-        location_id,
+        location_param,
         key.trim()
     );
     tracing::info!("advanced weather url={}", url);
 
+    let recent_location = LocationOption {
+        id: location_id,
+        name: location_name,
+        adm1: location_adm1,
+        adm2: location_adm2,
+        lat: location_lat,
+        lon: location_lon,
+    };
+
     match http_get_json(&url) {
         Ok(mut json) => {
-            json["location"] = serde_json::Value::String(location_name);
+            json["location"] = serde_json::Value::String(recent_location.name.clone());
             let payload = json.to_string();
+            let recent_location = recent_location.clone();
             wit_bindgen::block_on(async move {
                 match send_via_interconnect(&payload).await {
-                    Ok(SendOutcome::Sent) => show_alert("成功", "发送成功"),
+                    Ok(SendOutcome::Sent) => {
+                        record_recent_location(recent_location);
+                        if selected_from_search {
+                            clear_search_after_sync();
+                        }
+                        show_alert("成功", "发送成功");
+                    }
                     Ok(SendOutcome::Pending) => {
                         tracing::info!("send_via_interconnect pending; waiting for ready");
+                        record_recent_location(recent_location);
+                        if selected_from_search {
+                            clear_search_after_sync();
+                        }
                     }
                     Err(e) => show_alert("失败", &format!("发送失败: {}", e)),
                 }
@@ -590,6 +631,7 @@ fn try_send_pending(addr: String, pkg: String) {
         match send_result {
             Ok(_) => {
                 tracing::info!("pending send completed");
+                record_recent_location_from_paste(&pending.data);
                 HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
                 show_alert("成功", "发送成功");
             }
@@ -632,6 +674,7 @@ fn try_send_pending_any() {
         match send_result {
             Ok(_) => {
                 tracing::info!("pending send completed (timeout)");
+                record_recent_location_from_paste(&pending.data);
                 HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
                 show_alert("成功", "发送成功");
             }
@@ -953,8 +996,22 @@ fn search_locations() {
                     let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
                     let adm1 = item.get("adm1").and_then(|v| v.as_str()).unwrap_or("").to_string();
                     let adm2 = item.get("adm2").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    if !id.is_empty() {
-                        results.push(LocationOption { id, name, adm1, adm2 });
+                    let lat = item.get("lat").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let lon = item.get("lon").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    if !id.is_empty() || (!lat.is_empty() && !lon.is_empty()) {
+                        let normalized_id = if id.is_empty() {
+                            format!("{},{}", lon, lat)
+                        } else {
+                            id
+                        };
+                        results.push(LocationOption {
+                            id: normalized_id,
+                            name,
+                            adm1,
+                            adm2,
+                            lat,
+                            lon,
+                        });
                     }
                 }
             }
@@ -973,11 +1030,37 @@ fn search_locations() {
 fn select_location(idx: usize) {
     let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
     let picked = state.search_results.get(idx).cloned();
-    if let Some(item) = picked {
-        state.selected_location_id = item.id;
-        state.selected_location_name = item.name;
+    if let Some(item) = &picked {
+        state.selected_location_id = item.id.clone();
+        state.selected_location_name = item.name.clone();
+        state.selected_location_adm1 = item.adm1.clone();
+        state.selected_location_adm2 = item.adm2.clone();
+        state.selected_location_lat = item.lat.clone();
+        state.selected_location_lon = item.lon.clone();
+        state.selected_days = 7;
+        state.selected_from_search = true;
     }
     drop(state);
+    let _ = crate::ui::state::save_all_settings();
+    crate::ui::build::rerender_main_ui();
+}
+
+fn select_recent_location(idx: usize) {
+    let _picked = {
+        let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let picked = state.recent_locations.get(idx).cloned();
+        if let Some(item) = &picked {
+            state.selected_location_id = item.id.clone();
+            state.selected_location_name = item.name.clone();
+            state.selected_location_adm1 = item.adm1.clone();
+            state.selected_location_adm2 = item.adm2.clone();
+            state.selected_location_lat = item.lat.clone();
+            state.selected_location_lon = item.lon.clone();
+            state.selected_days = 7;
+            state.selected_from_search = false;
+        }
+        picked
+    };
     let _ = crate::ui::state::save_all_settings();
     crate::ui::build::rerender_main_ui();
 }
@@ -988,6 +1071,195 @@ fn select_days(day: u32) {
     }
     let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
     state.selected_days = day;
+    drop(state);
+    let _ = crate::ui::state::save_all_settings();
+    crate::ui::build::rerender_main_ui();
+}
+
+fn record_recent_location(location: LocationOption) {
+    const MAX_RECENT: usize = 5;
+    let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+    state.selected_location_id = location.id.clone();
+    state.selected_location_name = location.name.clone();
+    state.selected_location_adm1 = location.adm1.clone();
+    state.selected_location_adm2 = location.adm2.clone();
+    state.selected_location_lat = location.lat.clone();
+    state.selected_location_lon = location.lon.clone();
+
+    state.recent_locations.retain(|item| item.id != location.id);
+    state.recent_locations.insert(0, location);
+    if state.recent_locations.len() > MAX_RECENT {
+        state.recent_locations.truncate(MAX_RECENT);
+    }
+    drop(state);
+    let _ = crate::ui::state::save_all_settings();
+    crate::ui::build::rerender_main_ui();
+}
+
+fn record_recent_location_from_paste(data: &str) {
+    let json = match serde_json::from_str::<serde_json::Value>(data) {
+        Ok(value) => value,
+        Err(_) => return,
+    };
+
+    let fxlink = json
+        .get("fxLink")
+        .and_then(|v| v.as_str())
+        .or_else(|| json.get("location").and_then(|v| v.get("fxLink")).and_then(|v| v.as_str()));
+    let location_id = fxlink
+        .and_then(extract_location_id_from_fxlink)
+        .unwrap_or_default();
+    if location_id.is_empty() {
+        return;
+    }
+
+    let location_name = json
+        .get("location")
+        .and_then(|v| v.as_str())
+        .or_else(|| json.get("location").and_then(|v| v.get("name")).and_then(|v| v.as_str()))
+        .unwrap_or("")
+        .to_string();
+
+    record_recent_location(LocationOption {
+        id: location_id,
+        name: location_name,
+        adm1: String::new(),
+        adm2: String::new(),
+        lat: String::new(),
+        lon: String::new(),
+    });
+}
+
+fn extract_location_id_from_fxlink(link: &str) -> Option<String> {
+    let end = link.rfind(".html")?;
+    let part = &link[..end];
+    let start = part.rfind('-')?;
+    let id = &part[start + 1..];
+    if id.chars().all(|c| c.is_ascii_digit()) && !id.is_empty() {
+        Some(id.to_string())
+    } else {
+        None
+    }
+}
+
+pub fn resolve_recent_locations_if_needed() {
+    let (host, key, use_custom_api, recent, selected_id, resolving, advanced_mode, current_tab) = {
+        let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        (
+            state.custom_api_host.clone(),
+            state.custom_api_key.clone(),
+            state.use_custom_api,
+            state.recent_locations.clone(),
+            state.selected_location_id.clone(),
+            state.recent_resolving,
+            state.advanced_mode,
+            state.current_tab,
+        )
+    };
+
+    if resolving {
+        return;
+    }
+    if !use_custom_api || !advanced_mode || current_tab != MainTab::PasteData {
+        return;
+    }
+    if host.trim().is_empty() || key.trim().is_empty() {
+        return;
+    }
+
+    let pending: Vec<LocationOption> = recent
+        .into_iter()
+        .filter(|item| {
+            !item.id.trim().is_empty()
+                && (item.name.trim().is_empty()
+                    || item.adm1.trim().is_empty()
+                    || item.adm2.trim().is_empty())
+        })
+        .collect();
+    if pending.is_empty() {
+        return;
+    }
+
+    {
+        let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.recent_resolving = true;
+    }
+
+    let mut updates: Vec<(String, LocationOption)> = Vec::new();
+    for item in pending {
+        let query_id = item.id.clone();
+        let base = format!("https://{}/geo/v2/city/lookup", host.trim());
+        let url = match Url::parse_with_params(&base, &[("location", query_id.clone()), ("key", key.clone())]) {
+            Ok(u) => u.to_string(),
+            Err(_) => continue,
+        };
+        if let Ok(json) = http_get_json(&url) {
+            if let Some(first) = json.get("location").and_then(|v| v.as_array()).and_then(|v| v.first()) {
+                let name = first.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let adm1 = first.get("adm1").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let adm2 = first.get("adm2").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let lat = first.get("lat").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let lon = first.get("lon").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let id = first.get("id").and_then(|v| v.as_str()).unwrap_or(&item.id).to_string();
+                updates.push((
+                    query_id,
+                    LocationOption {
+                    id,
+                    name,
+                    adm1,
+                    adm2,
+                    lat,
+                    lon,
+                    },
+                ));
+            }
+        }
+    }
+
+    if updates.is_empty() {
+        let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.recent_resolving = false;
+        return;
+    }
+
+    {
+        let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        for (query_id, update) in &updates {
+            if let Some(item) = state
+                .recent_locations
+                .iter_mut()
+                .find(|item| item.id == update.id || item.id == *query_id)
+            {
+                item.id = update.id.clone();
+                item.name = update.name.clone();
+                item.adm1 = update.adm1.clone();
+                item.adm2 = update.adm2.clone();
+                item.lat = update.lat.clone();
+                item.lon = update.lon.clone();
+            }
+        }
+        if let Some((_query_id, update)) = updates
+            .iter()
+            .find(|(query_id, item)| item.id == selected_id || *query_id == selected_id)
+        {
+            state.selected_location_id = update.id.clone();
+            state.selected_location_name = update.name.clone();
+            state.selected_location_adm1 = update.adm1.clone();
+            state.selected_location_adm2 = update.adm2.clone();
+            state.selected_location_lat = update.lat.clone();
+            state.selected_location_lon = update.lon.clone();
+        }
+        state.recent_resolving = false;
+    }
+
+    let _ = crate::ui::state::save_all_settings();
+    crate::ui::build::rerender_main_ui();
+}
+fn clear_search_after_sync() {
+    let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+    state.search_query.clear();
+    state.search_results.clear();
+    state.selected_from_search = false;
     drop(state);
     let _ = crate::ui::state::save_all_settings();
     crate::ui::build::rerender_main_ui();
