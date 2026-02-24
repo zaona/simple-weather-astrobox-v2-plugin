@@ -794,6 +794,7 @@ fn build_section_title(text: &str) -> ui::Element {
     ui::Element::new(ui::ElementType::P, Some(text))
         .size(13)
         .text_color("#888888")
+        .margin_left(15)
         .margin_bottom(8)
 }
 
