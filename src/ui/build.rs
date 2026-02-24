@@ -82,6 +82,7 @@ fn build_send_tab(state: &UiState) -> ui::Element {
         .on(ui::Event::Change, INPUT_CHANGE_EVENT)
         .radius(8)
         .bg("#2A2A2A")
+        .height(INPUT_HEIGHT)
         .width_full()
         .margin_bottom(20);
 
@@ -192,7 +193,7 @@ fn build_settings_main(state: &UiState) -> ui::Element {
     let build_time_raw = option_env!("AB_BUILD_TIME").unwrap_or("unknown");
     let build_user = option_env!("AB_BUILD_USER").unwrap_or("unknown");
     let build_branch = option_env!("AB_BUILD_GIT_BRANCH").unwrap_or("unknown");
-    let build_hash = option_env!("AB_BUILD_GIT_HASH").unwrap_or("unknown");
+    let build_hash = short_git_hash(option_env!("AB_BUILD_GIT_HASH").unwrap_or("unknown"));
     let build_time = format_beijing_time(build_time_raw);
 
     let build_time_row = build_settings_card(
@@ -679,7 +680,7 @@ fn mask_value(value: &str, show: bool) -> String {
     }
 }
 
-const INPUT_HEIGHT: u32 = 32;
+const INPUT_HEIGHT: u32 = 40;
 const ICON_SIZE: u32 = 24;
 const ICON_TOP: u32 = (INPUT_HEIGHT - ICON_SIZE) / 2;
 const ICON_RIGHT: u32 = 8;
@@ -856,8 +857,8 @@ fn switch_on_svg() -> String {
 
 fn build_tab_button(label: &str, icon_svg: String, is_active: bool, event_id: &str) -> ui::Element {
     let icon = ui::Element::new(ui::ElementType::Svg, Some(&icon_svg))
-        .width(20)
-        .height(20);
+        .width(22)
+        .height(22);
 
     let text = ui::Element::new(ui::ElementType::Span, Some(label))
         .size(14);
@@ -879,10 +880,18 @@ fn build_tab_button(label: &str, icon_svg: String, is_active: bool, event_id: &s
         .child(text)
 }
 
+fn short_git_hash(hash: &str) -> String {
+    let trimmed = hash.trim();
+    if trimmed.is_empty() || trimmed == "unknown" {
+        return "unknown".to_string();
+    }
+    trimmed.chars().take(7).collect()
+}
+
 fn build_icon_text_button_full(label: &str, icon_svg: String, event_id: &str) -> ui::Element {
     let icon = ui::Element::new(ui::ElementType::Svg, Some(&icon_svg))
-        .width(16)
-        .height(16);
+        .width(24)
+        .height(24);
 
     let text = ui::Element::new(ui::ElementType::Span, Some(label))
         .size(14);
@@ -903,8 +912,8 @@ fn build_icon_text_button_full(label: &str, icon_svg: String, event_id: &str) ->
 
 fn build_icon_text_button_inline(label: &str, icon_svg: String, event_id: &str) -> ui::Element {
     let icon = ui::Element::new(ui::ElementType::Svg, Some(&icon_svg))
-        .width(16)
-        .height(16);
+        .width(24)
+        .height(24);
 
     let text = ui::Element::new(ui::ElementType::Span, Some(label))
         .size(14);

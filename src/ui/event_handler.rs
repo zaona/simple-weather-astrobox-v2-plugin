@@ -362,6 +362,15 @@ fn send_weather_data() {
         return;
     }
 
+    if let Err(reason) = validate_paste_weather_data(&weather_data) {
+        tracing::warn!("paste weather data validation failed: {}", reason);
+        show_alert(
+            "提示",
+            "天气数据粘贴不全，建议使用自定义api启用高级同步模式，或者使用微信输入法等可完整复制粘贴内容的输入法。",
+        );
+        return;
+    }
+
     tracing::info!("weather_data has content, starting send");
 
     let data = weather_data.clone();
@@ -385,6 +394,54 @@ fn send_weather_data() {
             }
         }
     });
+}
+
+fn validate_paste_weather_data(data: &str) -> Result<(), String> {
+    let trimmed = data.trim();
+    if trimmed.is_empty() {
+        return Err("empty payload".to_string());
+    }
+
+    let json = serde_json::from_str::<serde_json::Value>(trimmed)
+        .map_err(|e| format!("invalid json: {}", e))?;
+    let obj = json
+        .as_object()
+        .ok_or_else(|| "json root is not an object".to_string())?;
+
+    let has_main_weather = obj
+        .get("daily")
+        .and_then(|v| v.as_array())
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+        || obj.get("now").and_then(|v| v.as_object()).is_some()
+        || obj
+            .get("hourly")
+            .and_then(|v| v.as_array())
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
+
+    let has_location_marker = obj
+        .get("fxLink")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+        || obj
+            .get("location")
+            .and_then(|v| v.get("fxLink"))
+            .and_then(|v| v.as_str())
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+        || obj
+            .get("location")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+
+    if has_main_weather || has_location_marker {
+        Ok(())
+    } else {
+        Err("missing weather keys".to_string())
+    }
 }
 
 fn send_weather_data_advanced() {
