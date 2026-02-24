@@ -143,7 +143,7 @@ fn build_settings_main(state: &UiState) -> ui::Element {
         let adv_card = build_settings_card(
             adv_mode_svg(),
             "高级同步模式",
-            Some("开启后可直接在插件内搜索位置并获取天气数据"),
+            Some("在插件内获取天气数据并同步"),
             Some(build_switch(state.advanced_mode, ADV_MODE_TOGGLE_EVENT)),
             None,
         );
@@ -153,7 +153,7 @@ fn build_settings_main(state: &UiState) -> ui::Element {
     let api_card = build_settings_card(
         api_tab_svg(),
         "API设置",
-        Some("配置自定义API并验证有效性"),
+        Some("配置自定义api启用高级同步模式"),
         Some(build_arrow_icon()),
         Some(OPEN_SETTINGS_API_EVENT),
     );
@@ -165,8 +165,8 @@ fn build_settings_main(state: &UiState) -> ui::Element {
 
     let afd_card = build_settings_card(
         afd_svg(),
-        "去爱发电支持简明天气",
-        Some("简明完全免费，开源，我们需要您的支持！"),
+        "赞助支持",
+        Some("简明天气完全免费开源"),
         Some(build_more_link_icon()),
         Some(OPEN_AFD_EVENT),
     );
@@ -174,7 +174,7 @@ fn build_settings_main(state: &UiState) -> ui::Element {
     let help_card = build_settings_card(
         help_doc_svg(),
         "帮助文档",
-        Some("有什么不懂的吗？我们完成了简明所有能想到的问题"),
+        Some("操作步骤与常见问题解答"),
         Some(build_more_link_icon()),
         Some(OPEN_HELP_DOC_EVENT),
     );
@@ -182,7 +182,7 @@ fn build_settings_main(state: &UiState) -> ui::Element {
     let qq_card = build_settings_card(
         qq_group_svg(),
         "QQ群",
-        Some("文档也没解决吗，那来QQ群反馈吧"),
+        Some("947038648"),
         Some(build_more_link_icon()),
         Some(OPEN_QQ_GROUP_EVENT),
     );
