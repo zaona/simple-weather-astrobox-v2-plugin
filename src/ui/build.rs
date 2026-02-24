@@ -15,10 +15,15 @@ fn is_pressed(event_id: &str) -> bool {
 
 fn attach_hover_press(mut el: ui::Element, event_id: &str) -> ui::Element {
     el = el
-        .on(ui::Event::MouseEnter, &format!("{}{}", HOVER_ENTER_PREFIX, event_id))
-        .on(ui::Event::MouseLeave, &format!("{}{}", HOVER_LEAVE_PREFIX, event_id))
-        .on(ui::Event::PointerDown, &format!("{}{}", PRESS_DOWN_PREFIX, event_id))
-        .on(ui::Event::PointerUp, &format!("{}{}", PRESS_UP_PREFIX, event_id));
+        .on(ui::Event::MouseEnter, event_id)
+        .on(ui::Event::MouseLeave, BUTTON_MOUSE_LEAVE);
+    el
+}
+
+fn attach_hover(mut el: ui::Element, event_id: &str) -> ui::Element {
+    el = el
+        .on(ui::Event::MouseEnter, event_id)
+        .on(ui::Event::MouseLeave, BUTTON_MOUSE_LEAVE);
     el
 }
 pub fn render_main_ui(element_id: &str) {
@@ -690,21 +695,18 @@ fn build_days_row(state: &UiState) -> ui::Element {
             base_bg
         };
 
-        let inner = ui::Element::new(ui::ElementType::Button, Some(&format!("{}天", day)))
+        let btn = ui::Element::new(ui::ElementType::Button, None)
             .without_default_styles()
             .on(ui::Event::Click, &event_id)
+            .radius(999)
             .padding_top(8)
             .padding_bottom(8)
             .padding_left(16)
             .padding_right(16)
-            .bg("transparent")
-            .text_color(if is_active { "#FFFFFF" } else { "#BBBBBB" });
-
-        let btn = ui::Element::new(ui::ElementType::Div, None)
-            .radius(999)
             .bg(bg)
+            .text_color(if is_active { "#FFFFFF" } else { "#BBBBBB" })
             .transition("all 0.3s ease")
-            .child(inner);
+            .child(ui::Element::new(ui::ElementType::Span, Some(&format!("{}天", day))).size(14));
         let btn = attach_hover_press(btn, &event_id);
 
         row = row.child(btn);
@@ -869,21 +871,14 @@ fn build_settings_card(
     text_col = text_col.child(title_el);
 
     if let Some(desc_text) = desc {
-        let desc_el = ui::Element::new(ui::ElementType::P, Some(desc_text))
+        let desc_single = single_line_desc(desc_text, 28);
+        let desc_el = ui::Element::new(ui::ElementType::P, Some(&desc_single))
             .size(13)
             .text_color("#888888");
         text_col = text_col.child(desc_el);
     }
 
-    let mut inner_row = {
-        let base = ui::Element::new(
-            if click_event.is_some() {
-                ui::ElementType::Button
-            } else {
-                ui::ElementType::Div
-            },
-            None,
-        )
+    let mut inner_row = ui::Element::new(ui::ElementType::Div, None)
         .flex()
         .flex_direction(ui::FlexDirection::Row)
         .align_center()
@@ -896,13 +891,6 @@ fn build_settings_card(
         .child(icon_wrap)
         .child(ui::Element::new(ui::ElementType::Span, None).width(10))
         .child(text_col);
-
-        if let Some(event_id) = click_event {
-            base.without_default_styles().on(ui::Event::Click, event_id)
-        } else {
-            base
-        }
-    };
 
     if let Some(right_el) = right {
         let right_wrap = ui::Element::new(ui::ElementType::Div, None)
@@ -922,10 +910,31 @@ fn build_settings_card(
         .child(inner_row);
 
     if let Some(event_id) = click_event {
-        row = attach_hover_press(row, event_id);
+        row = row.on(ui::Event::Click, event_id);
+        row = attach_hover(row, event_id);
     }
 
     row
+}
+
+fn single_line_desc(input: &str, max_chars: usize) -> String {
+    let mut buf = String::new();
+    let mut count = 0usize;
+    for ch in input.chars() {
+        if count >= max_chars {
+            break;
+        }
+        buf.push(ch);
+        count += 1;
+    }
+    if input.chars().count() > max_chars {
+        if max_chars >= 3 && buf.chars().count() >= 3 {
+            let trimmed: String = buf.chars().take(max_chars - 3).collect();
+            return format!("{}...", trimmed);
+        }
+        return format!("{}...", buf);
+    }
+    buf
 }
 
 fn build_section_title(text: &str) -> ui::Element {
@@ -1012,7 +1021,7 @@ fn build_tab_button(label: &str, icon_svg: String, is_active: bool, event_id: &s
         base_bg
     };
 
-    let inner = ui::Element::new(ui::ElementType::Button, None)
+    let btn = ui::Element::new(ui::ElementType::Button, None)
         .without_default_styles()
         .on(ui::Event::Click, event_id)
         .radius(999)
@@ -1020,19 +1029,14 @@ fn build_tab_button(label: &str, icon_svg: String, is_active: bool, event_id: &s
         .padding_bottom(10)
         .padding_left(14)
         .padding_right(14)
-        .bg("transparent")
+        .bg(bg)
         .text_color(if is_active { "#FFFFFF" } else { "#BBBBBB" })
+        .transition("all 0.3s ease")
         .flex()
         .align_center()
         .child(icon)
         .child(ui::Element::new(ui::ElementType::Span, None).width(5))
         .child(text);
-
-    let btn = ui::Element::new(ui::ElementType::Div, None)
-        .radius(999)
-        .bg(bg)
-        .transition("all 0.3s ease")
-        .child(inner);
 
     attach_hover_press(btn, event_id)
 }
@@ -1178,7 +1182,7 @@ fn build_location_chip(label: &str, icon_svg: String, event_id: &str, selected: 
         "#1E1E1F"
     };
 
-    let inner = ui::Element::new(ui::ElementType::Button, None)
+    let btn = ui::Element::new(ui::ElementType::Button, None)
         .without_default_styles()
         .on(ui::Event::Click, event_id)
         .radius(18)
@@ -1186,19 +1190,14 @@ fn build_location_chip(label: &str, icon_svg: String, event_id: &str, selected: 
         .padding_bottom(8)
         .padding_left(12)
         .padding_right(12)
-        .bg(if selected { "#0090FF26" } else { "transparent" })
+        .bg(if selected { "#0090FF26" } else { bg })
         .text_color(if selected { "#0090FF" } else { "#FFFFFF" })
+        .transition("all 0.3s ease")
         .flex()
         .align_center()
         .child(icon)
         .child(ui::Element::new(ui::ElementType::Span, None).width(6))
         .child(text);
-
-    let btn = ui::Element::new(ui::ElementType::Div, None)
-        .radius(18)
-        .bg(bg)
-        .transition("all 0.3s ease")
-        .child(inner);
 
     attach_hover_press(btn, event_id)
 }
