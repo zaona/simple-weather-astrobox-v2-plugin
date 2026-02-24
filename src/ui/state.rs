@@ -21,6 +21,13 @@ pub struct UiState {
     pub search_results: Vec<LocationOption>,
     pub selected_location_id: String,
     pub selected_location_name: String,
+    pub selected_location_adm1: String,
+    pub selected_location_adm2: String,
+    pub selected_location_lat: String,
+    pub selected_location_lon: String,
+    pub selected_from_search: bool,
+    pub recent_resolving: bool,
+    pub recent_locations: Vec<LocationOption>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -35,12 +42,16 @@ pub enum SettingsPage {
     Api,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct LocationOption {
     pub id: String,
     pub name: String,
     pub adm1: String,
     pub adm2: String,
+    #[serde(default)]
+    pub lat: String,
+    #[serde(default)]
+    pub lon: String,
 }
 
 static UI_STATE: OnceLock<RwLock<UiState>> = OnceLock::new();
@@ -60,11 +71,18 @@ pub fn ui_state() -> &'static RwLock<UiState> {
             show_api_key: false,
             settings_loaded: false,
             advanced_mode: false,
-            selected_days: 3,
+            selected_days: 7,
             search_query: String::new(),
             search_results: Vec::new(),
             selected_location_id: String::new(),
             selected_location_name: String::new(),
+            selected_location_adm1: String::new(),
+            selected_location_adm2: String::new(),
+            selected_location_lat: String::new(),
+            selected_location_lon: String::new(),
+            selected_from_search: false,
+            recent_resolving: false,
+            recent_locations: Vec::new(),
         })
     })
 }
@@ -82,6 +100,16 @@ struct StoredApiSettings {
     selected_location_id: String,
     #[serde(default)]
     selected_location_name: String,
+    #[serde(default)]
+    selected_location_adm1: String,
+    #[serde(default)]
+    selected_location_adm2: String,
+    #[serde(default)]
+    selected_location_lat: String,
+    #[serde(default)]
+    selected_location_lon: String,
+    #[serde(default)]
+    recent_locations: Vec<LocationOption>,
 }
 
 pub fn load_api_settings_once() {
@@ -107,9 +135,25 @@ pub fn load_api_settings_once() {
                 state.custom_api_host = stored.custom_api_host;
                 state.custom_api_key = stored.custom_api_key;
                 state.advanced_mode = stored.advanced_mode;
-                state.selected_days = if stored.selected_days == 0 { 3 } else { stored.selected_days };
+                state.selected_days = if stored.selected_days == 0 { 7 } else { stored.selected_days };
                 state.selected_location_id = stored.selected_location_id;
                 state.selected_location_name = stored.selected_location_name;
+                state.selected_location_adm1 = stored.selected_location_adm1;
+                state.selected_location_adm2 = stored.selected_location_adm2;
+                state.selected_location_lat = stored.selected_location_lat;
+                state.selected_location_lon = stored.selected_location_lon;
+                state.recent_locations = stored.recent_locations;
+                if state.selected_location_id.is_empty() {
+                    let first = state.recent_locations.first().cloned();
+                    if let Some(first) = first {
+                        state.selected_location_id = first.id;
+                        state.selected_location_name = first.name;
+                        state.selected_location_adm1 = first.adm1;
+                        state.selected_location_adm2 = first.adm2;
+                        state.selected_location_lat = first.lat;
+                        state.selected_location_lon = first.lon;
+                    }
+                }
                 info!("loaded api settings from disk");
             }
             Err(e) => {
@@ -128,9 +172,14 @@ pub fn save_api_settings(use_custom_api: bool, host: &str, key: &str) -> Result<
         custom_api_host: host.to_string(),
         custom_api_key: key.to_string(),
         advanced_mode: false,
-        selected_days: 3,
+        selected_days: 7,
         selected_location_id: String::new(),
         selected_location_name: String::new(),
+        selected_location_adm1: String::new(),
+        selected_location_adm2: String::new(),
+        selected_location_lat: String::new(),
+        selected_location_lon: String::new(),
+        recent_locations: Vec::new(),
     };
 
     let content = serde_json::to_string_pretty(&stored).map_err(|e| e.to_string())?;
@@ -148,6 +197,11 @@ pub fn save_all_settings() -> Result<(), String> {
         selected_days: state.selected_days,
         selected_location_id: state.selected_location_id.clone(),
         selected_location_name: state.selected_location_name.clone(),
+        selected_location_adm1: state.selected_location_adm1.clone(),
+        selected_location_adm2: state.selected_location_adm2.clone(),
+        selected_location_lat: state.selected_location_lat.clone(),
+        selected_location_lon: state.selected_location_lon.clone(),
+        recent_locations: state.recent_locations.clone(),
     };
 
     let content = serde_json::to_string_pretty(&stored).map_err(|e| e.to_string())?;
