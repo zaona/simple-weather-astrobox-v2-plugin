@@ -28,6 +28,7 @@ pub fn render_main_ui(element_id: &str) {
     }
 
     crate::ui::state::load_api_settings_once();
+    crate::ui::event_handler::resolve_recent_locations_if_needed();
 
     let ui_tree = build_main_ui();
     psys_host::ui::render(element_id, ui_tree);
@@ -512,6 +513,7 @@ fn build_advanced_send_tab(state: &UiState) -> ui::Element {
         .child(search_input)
         .child(search_button);
 
+    let recent_container = build_recent_locations(state);
     let results_container = build_location_results(state);
 
     let days_label = ui::Element::new(ui::ElementType::P, Some("同步天数"))
@@ -537,10 +539,67 @@ fn build_advanced_send_tab(state: &UiState) -> ui::Element {
     root
         .child(search_label)
         .child(search_row)
+        .child(recent_container)
         .child(results_container)
         .child(days_label)
         .child(days_row)
         .child(send_button)
+}
+
+fn build_recent_locations(state: &UiState) -> ui::Element {
+    let mut container = ui::Element::new(ui::ElementType::Div, None)
+        .flex()
+        .flex_direction(ui::FlexDirection::Column)
+        .width_full()
+        .margin_bottom(8);
+
+    if state.recent_locations.is_empty() {
+        return container;
+    }
+
+    let label = ui::Element::new(ui::ElementType::P, Some("最近地点"))
+        .size(14)
+        .margin_bottom(8)
+        .text_color("#BBBBBB");
+    container = container.child(label);
+
+    let mut row = ui::Element::new(ui::ElementType::Div, None)
+        .flex()
+        .flex_direction(ui::FlexDirection::Row)
+        .align_center()
+        .margin_bottom(8);
+    let mut count = 0usize;
+
+    for (idx, item) in state.recent_locations.iter().enumerate() {
+        let label = build_location_label(item);
+        let is_selected = item.id == state.selected_location_id;
+        let btn = build_location_chip(
+            &label,
+            location_pin_svg(is_selected),
+            &format!("{}{}", SELECT_RECENT_PREFIX, idx),
+            is_selected,
+        );
+
+        row = row.child(btn);
+        count += 1;
+        if count < 3 {
+            row = row.child(ui::Element::new(ui::ElementType::Span, None).width(8));
+        } else {
+            container = container.child(row);
+            row = ui::Element::new(ui::ElementType::Div, None)
+                .flex()
+                .flex_direction(ui::FlexDirection::Row)
+                .align_center()
+                .margin_bottom(8);
+            count = 0;
+        }
+    }
+
+    if count > 0 {
+        container = container.child(row);
+    }
+
+    container
 }
 
 fn build_location_results(state: &UiState) -> ui::Element {
@@ -550,6 +609,10 @@ fn build_location_results(state: &UiState) -> ui::Element {
         .width_full()
         .margin_bottom(16);
 
+    if state.search_query.trim().is_empty() {
+        return container;
+    }
+
     if state.search_results.is_empty() {
         return container.child(
             ui::Element::new(ui::ElementType::P, Some("暂无搜索结果"))
@@ -557,6 +620,12 @@ fn build_location_results(state: &UiState) -> ui::Element {
                 .text_color("#888888"),
         );
     }
+
+    let label = ui::Element::new(ui::ElementType::P, Some("具体地点"))
+        .size(14)
+        .margin_bottom(8)
+        .text_color("#BBBBBB");
+    container = container.child(label);
 
     let mut row = ui::Element::new(ui::ElementType::Div, None)
         .flex()
@@ -566,16 +635,13 @@ fn build_location_results(state: &UiState) -> ui::Element {
     let mut count = 0usize;
 
     for (idx, item) in state.search_results.iter().enumerate() {
-        let label = if item.adm1.is_empty() && item.adm2.is_empty() {
-            item.name.clone()
-        } else {
-            format!("{} · {} {}", item.name, item.adm1, item.adm2).trim().to_string()
-        };
+        let label = build_location_label(item);
         let is_selected = item.id == state.selected_location_id;
         let btn = build_location_chip(
             &label,
             location_pin_svg(is_selected),
             &format!("{}{}", SELECT_LOCATION_PREFIX, idx),
+            is_selected,
         );
 
         row = row.child(btn);
@@ -1094,7 +1160,7 @@ fn build_search_inline_button(event_id: &str) -> ui::Element {
     attach_hover_press(btn, event_id)
 }
 
-fn build_location_chip(label: &str, icon_svg: String, event_id: &str) -> ui::Element {
+fn build_location_chip(label: &str, icon_svg: String, event_id: &str, selected: bool) -> ui::Element {
     let icon = ui::Element::new(ui::ElementType::Svg, Some(&icon_svg))
         .width(16)
         .height(16);
@@ -1120,8 +1186,8 @@ fn build_location_chip(label: &str, icon_svg: String, event_id: &str) -> ui::Ele
         .padding_bottom(8)
         .padding_left(12)
         .padding_right(12)
-        .bg("transparent")
-        .text_color("#FFFFFF")
+        .bg(if selected { "#0090FF26" } else { "transparent" })
+        .text_color(if selected { "#0090FF" } else { "#FFFFFF" })
         .flex()
         .align_center()
         .child(icon)
@@ -1135,6 +1201,20 @@ fn build_location_chip(label: &str, icon_svg: String, event_id: &str) -> ui::Ele
         .child(inner);
 
     attach_hover_press(btn, event_id)
+}
+
+fn build_location_label(item: &LocationOption) -> String {
+    if item.name.trim().is_empty() {
+        if !item.lon.is_empty() && !item.lat.is_empty() {
+            return format!("{}, {}", item.lon, item.lat);
+        }
+        return "未知地点".to_string();
+    }
+    if item.adm1.is_empty() && item.adm2.is_empty() {
+        item.name.clone()
+    } else {
+        format!("{} · {} {}", item.name, item.adm1, item.adm2).trim().to_string()
+    }
 }
 
 fn search_svg() -> String {
