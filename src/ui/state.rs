@@ -28,6 +28,8 @@ pub struct UiState {
     pub selected_from_search: bool,
     pub recent_resolving: bool,
     pub recent_locations: Vec<LocationOption>,
+    pub last_sync_time_ms: u64,
+    pub last_sync_location: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -83,6 +85,8 @@ pub fn ui_state() -> &'static RwLock<UiState> {
             selected_from_search: false,
             recent_resolving: false,
             recent_locations: Vec::new(),
+            last_sync_time_ms: 0,
+            last_sync_location: String::new(),
         })
     })
 }
