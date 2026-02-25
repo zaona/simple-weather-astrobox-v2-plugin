@@ -599,6 +599,7 @@ async fn send_via_interconnect(data: &str) -> Result<SendOutcome, String> {
             .await
             .map_err(|e| format!("{:?}", e))?;
         tracing::info!("send_qaic_message completed");
+        update_last_sync_from_data(&data_str);
         return Ok(SendOutcome::Sent);
     }
 
@@ -638,6 +639,32 @@ fn extract_interconnect_fields(payload: &str) -> (Option<String>, Option<String>
         return (addr, pkg, payload_text);
     }
     (None, None, None)
+}
+
+fn update_last_sync_from_data(data: &str) {
+    let location_from_data = extract_location_from_payload(data);
+    let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+    state.last_sync_time_ms = now_ms();
+
+    if let Some(loc) = location_from_data {
+        if !loc.is_empty() {
+            state.last_sync_location = loc;
+            drop(state);
+            crate::ui::render_sync_card(crate::ui::SYNC_CARD_ID);
+            return;
+        }
+    }
+
+    if !state.selected_location_name.is_empty() {
+        state.last_sync_location = state.selected_location_name.clone();
+    }
+    drop(state);
+    crate::ui::render_sync_card(crate::ui::SYNC_CARD_ID);
+}
+
+fn extract_location_from_payload(data: &str) -> Option<String> {
+    let json = serde_json::from_str::<serde_json::Value>(data).ok()?;
+    json.get("location").and_then(|v| v.as_str()).map(|s| s.to_string())
 }
 
 fn try_send_pending(addr: String, pkg: String) {
@@ -690,6 +717,7 @@ fn try_send_pending(addr: String, pkg: String) {
                 tracing::info!("pending send completed");
                 record_recent_location_from_paste(&pending.data);
                 HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
+                update_last_sync_from_data(&pending.data);
                 show_alert("成功", "发送成功");
             }
             Err(e) => {
@@ -733,6 +761,7 @@ fn try_send_pending_any() {
                 tracing::info!("pending send completed (timeout)");
                 record_recent_location_from_paste(&pending.data);
                 HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
+                update_last_sync_from_data(&pending.data);
                 show_alert("成功", "发送成功");
             }
             Err(e) => {

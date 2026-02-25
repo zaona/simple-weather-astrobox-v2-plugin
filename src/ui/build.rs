@@ -2,6 +2,8 @@ use crate::astrobox::psys_host;
 use crate::astrobox::psys_host::ui;
 use super::state::*;
 use super::event_handler::*;
+use std::time::{SystemTime, UNIX_EPOCH};
+use super::SYNC_CARD_ID;
 
 pub fn render_main_ui(element_id: &str) {
     {
@@ -36,6 +38,20 @@ pub fn build_main_ui() -> ui::Element {
     container
         .child(tabs)
         .child(content)
+}
+
+pub fn render_sync_card(card_id: &str) {
+    tracing::info!("render_sync_card called: card_id={}", card_id);
+    if card_id != SYNC_CARD_ID {
+        tracing::info!(
+            "render_sync_card id mismatch: expected {}, got {}",
+            SYNC_CARD_ID,
+            card_id
+        );
+    }
+    let text = build_sync_card_text();
+    tracing::info!("render_sync_card content: {}", text);
+    psys_host::ui::render_to_text_card(card_id, &text);
 }
 
 fn build_tabs(state: &UiState) -> ui::Element {
@@ -331,6 +347,59 @@ fn build_settings_api(state: &UiState) -> ui::Element {
         .child(key_row)
         .child(save_button)
         .child(action_row.child(reset_button).child(help_button))
+}
+
+fn build_sync_card_text() -> String {
+    let state = ui_state()
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let location = if state.last_sync_location.is_empty() {
+        "暂无"
+    } else {
+        state.last_sync_location.as_str()
+    };
+
+    let (time_text, expired) = if state.last_sync_time_ms == 0 {
+        ("暂无".to_string(), false)
+    } else {
+        let elapsed = now_ms().saturating_sub(state.last_sync_time_ms);
+        let expire_ms = state.selected_days as u64 * 24 * 60 * 60 * 1000;
+        let expired = expire_ms > 0 && elapsed > expire_ms;
+        (format_relative(elapsed), expired)
+    };
+
+    let expired_mark = if expired { " (已过期)" } else { "" };
+    format!(
+        "上次同步\n地点: {}\n时间: {}{}",
+        location,
+        time_text,
+        expired_mark
+    )
+}
+
+fn format_relative(elapsed_ms: u64) -> String {
+    let seconds = elapsed_ms / 1000;
+    if seconds < 60 {
+        return "刚刚".to_string();
+    }
+    let minutes = seconds / 60;
+    if minutes < 60 {
+        return format!("{}分钟前", minutes);
+    }
+    let hours = minutes / 60;
+    if hours < 24 {
+        return format!("{}小时前", hours);
+    }
+    let days = hours / 24;
+    format!("{}天前", days)
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn format_beijing_time(raw: &str) -> String {
