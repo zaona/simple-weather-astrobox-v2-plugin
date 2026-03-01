@@ -52,9 +52,8 @@ pub fn report_device_to_supabase(device_addr: &str, device_name: &str) -> Result
         Ok((status, resp)) => {
             if status == 200 || status == 201 || status == 204 {
                 tracing::info!(
-                    "supabase report ok: status={}, addr={}, source={}",
+                    "supabase report ok: status={}, source={}",
                     status,
-                    addr,
                     SUPABASE_SOURCE_AB_PLUGIN_V2
                 );
                 Ok(())
@@ -65,7 +64,8 @@ pub fn report_device_to_supabase(device_addr: &str, device_name: &str) -> Result
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
                     *slot = None;
                 }
-                Err(format!("status={}, body={}", status, resp))
+                let _ = resp;
+                Err(format!("status={}", status))
             }
         }
         Err(e) => Err(e),
@@ -113,7 +113,8 @@ fn get_supabase_access_token(supabase_url: &str, apikey: &str) -> Result<String,
         match http_post_json(endpoint, body, apikey, apikey) {
             Ok((status, resp)) => {
                 if status < 200 || status >= 300 {
-                    last_error = format!("auth status={}, body={}", status, resp);
+                    let _ = resp;
+                    last_error = format!("auth status={}", status);
                     continue;
                 }
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&resp) {
@@ -173,7 +174,7 @@ fn http_request_bytes(
     headers: &[(String, String)],
     body: Option<&[u8]>,
 ) -> Result<(u16, Vec<u8>), String> {
-    tracing::info!("supabase http_request_bytes method={}, url={}", method, url);
+    tracing::info!("supabase http_request_bytes method={}", method);
     let url = Url::parse(url).map_err(|e| e.to_string())?;
     let header_entries: Vec<(String, Vec<u8>)> = headers
         .iter()

@@ -250,29 +250,55 @@ def main():
     additional = manifest.get("additional_files") or []
 
     env = os.environ.copy()
+    is_strict_release = args.release and not args.package
+    required_release_env_keys = [
+        "SUPABASE_URL",
+        "SUPABASE_PUBLISHABLE_KEY",
+        "QWEATHER_API_HOST",
+        "QWEATHER_API_KEY",
+    ]
     env_local_path = root_dir / ".env.local"
     if not env_local_path.exists():
-        if args.release and not args.package:
+        if is_strict_release:
             sys.stderr.write(
                 "warning: 项目根目录未找到 .env.local。\n"
                 "warning: 当前执行的是 `python scripts/build_dist.py --release`，"
-                "该命令会让打包结果进入生产环境，但缺少 Supabase 配置，已阻止本次 release 构建。\n"
+                "该命令会让打包结果进入生产环境，但缺少必须配置，已阻止本次 release 构建。\n"
                 "warning: 如果只是日常开发和调试，请使用 "
                 "`python scripts/build_dist.py --release --package`。\n"
                 "warning: 请参考 .env.example 创建 .env.local，配置 "
-                "SUPABASE_URL 和 SUPABASE_PUBLISHABLE_KEY（该文件不会随 Git 提交）。\n"
+                "SUPABASE_URL、SUPABASE_PUBLISHABLE_KEY、QWEATHER_API_HOST、QWEATHER_API_KEY"
+                "（该文件不会随 Git 提交）。\n"
             )
             sys.exit(1)
 
         sys.stderr.write(
             "warning: 项目根目录未找到 .env.local。"
             "该插件使用 Supabase 上报，请参考 .env.example 创建 .env.local，"
-            "并在其中配置 SUPABASE_URL 和 SUPABASE_PUBLISHABLE_KEY"
+            "并在其中配置 SUPABASE_URL、SUPABASE_PUBLISHABLE_KEY，"
+            "如果需要内嵌高级模式默认API还需配置 QWEATHER_API_HOST、QWEATHER_API_KEY"
             "（该文件不会随 Git 提交）。"
             "当前将继续构建。\n"
         )
 
     local_env = load_local_env(root_dir)
+    if is_strict_release:
+        missing = []
+        for key in required_release_env_keys:
+            local_val = local_env.get(key, "")
+            env_val = env.get(key, "")
+            value = local_val if str(local_val).strip() else env_val
+            if not str(value).strip():
+                missing.append(key)
+        if missing:
+            sys.stderr.write(
+                "warning: 缺少 release 必填环境变量: "
+                + ", ".join(missing)
+                + "\n"
+                + "warning: 请在 .env.local 中补齐后重试。\n"
+            )
+            sys.exit(1)
+
     for key, value in local_env.items():
         env.setdefault(key, value)
     env.update(collect_build_info(root_dir))

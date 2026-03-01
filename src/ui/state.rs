@@ -2,6 +2,8 @@ use std::sync::{OnceLock, RwLock};
 use tracing::{info, warn};
 
 const SETTINGS_FILE: &str = "api_settings.json";
+const EMBEDDED_API_HOST: Option<&str> = option_env!("QWEATHER_API_HOST");
+const EMBEDDED_API_KEY: Option<&str> = option_env!("QWEATHER_API_KEY");
 
 pub struct UiState {
     pub root_element_id: Option<String>,
@@ -32,6 +34,62 @@ pub struct UiState {
     pub last_sync_location: String,
 }
 
+fn normalized_embedded(value: Option<&'static str>) -> String {
+    value.unwrap_or("").trim().to_string()
+}
+
+fn has_custom_api(state: &UiState) -> bool {
+    !state.custom_api_host.trim().is_empty() && !state.custom_api_key.trim().is_empty()
+}
+
+fn embedded_api_host_key() -> Option<(String, String)> {
+    let host = normalized_embedded(EMBEDDED_API_HOST);
+    let key = normalized_embedded(EMBEDDED_API_KEY);
+    if host.is_empty() || key.is_empty() {
+        None
+    } else {
+        Some((host, key))
+    }
+}
+
+pub fn effective_api_host_key(state: &UiState) -> Option<(String, String)> {
+    if has_custom_api(state) {
+        return Some((
+            state.custom_api_host.trim().to_string(),
+            state.custom_api_key.trim().to_string(),
+        ));
+    }
+    embedded_api_host_key()
+}
+
+pub fn has_effective_api(state: &UiState) -> bool {
+    effective_api_host_key(state).is_some()
+}
+
+fn scrub_embedded_from_custom_fields(state: &mut UiState) {
+    if let Some((embedded_host, embedded_key)) = embedded_api_host_key() {
+        if state.custom_api_host.trim() == embedded_host && state.custom_api_key.trim() == embedded_key
+        {
+            state.custom_api_host.clear();
+            state.custom_api_key.clear();
+        }
+    }
+}
+
+pub fn refresh_api_state(state: &mut UiState) {
+    scrub_embedded_from_custom_fields(state);
+    state.use_custom_api = has_custom_api(state);
+    if !has_effective_api(state) {
+        state.advanced_mode = false;
+    }
+}
+
+pub fn auto_enable_advanced_mode_if_api_ready(state: &mut UiState) {
+    if has_effective_api(state) {
+        state.advanced_mode = true;
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum MainTab {
     PasteData,
@@ -60,7 +118,7 @@ static UI_STATE: OnceLock<RwLock<UiState>> = OnceLock::new();
 
 pub fn ui_state() -> &'static RwLock<UiState> {
     UI_STATE.get_or_init(|| {
-        RwLock::new(UiState {
+        let mut state = UiState {
             root_element_id: None,
             weather_data: String::new(),
             deeplink_registered: false,
@@ -87,7 +145,10 @@ pub fn ui_state() -> &'static RwLock<UiState> {
             recent_locations: Vec::new(),
             last_sync_time_ms: 0,
             last_sync_location: String::new(),
-        })
+        };
+        refresh_api_state(&mut state);
+        auto_enable_advanced_mode_if_api_ready(&mut state);
+        RwLock::new(state)
     })
 }
 
@@ -158,6 +219,8 @@ pub fn load_api_settings_once() {
                         state.selected_location_lon = first.lon;
                     }
                 }
+                refresh_api_state(&mut state);
+                auto_enable_advanced_mode_if_api_ready(&mut state);
                 info!("loaded api settings from disk");
             }
             Err(e) => {

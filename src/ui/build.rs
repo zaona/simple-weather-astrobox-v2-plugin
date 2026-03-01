@@ -156,7 +156,7 @@ fn build_settings_main(state: &UiState) -> ui::Element {
     let basic_title = build_section_title("基本设置");
     root = root.child(basic_title);
 
-    if state.use_custom_api {
+    if has_effective_api(state) {
         let adv_card = build_settings_card(
             adv_mode_svg(),
             "高级同步模式",
@@ -167,10 +167,16 @@ fn build_settings_main(state: &UiState) -> ui::Element {
         root = root.child(adv_card.margin_bottom(10));
     }
 
+    let api_title = if state.use_custom_api {
+        "API设置（自定义）"
+    } else {
+        "API设置（默认）"
+    };
+
     let api_card = build_settings_card(
         api_tab_svg(),
-        "API设置",
-        Some("配置自定义api启用高级同步模式"),
+        api_title,
+        Some("配置自定义API以减轻简明压力"),
         Some(build_arrow_icon()),
         Some(OPEN_SETTINGS_API_EVENT),
     );
@@ -511,7 +517,7 @@ fn back_target_svg() -> String {
 }
 
 fn build_advanced_send_tab(state: &UiState) -> ui::Element {
-    let warn = if state.use_custom_api {
+    let warn = if has_effective_api(state) {
         None
     } else {
         Some(
