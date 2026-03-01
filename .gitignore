@@ -6,3 +6,6 @@ dist
 /Daymatter-AstroBox-Plugin
 /simple-weather-syncer-ng
 /simple-weather
+/Debug-Helper-AstroBox-Plugin
+.env.local
+/scripts/__pycache__
