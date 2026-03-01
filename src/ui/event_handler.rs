@@ -48,6 +48,7 @@ const PENDING_SEND_TIMEOUT_MS: u64 = 1200;
 
 struct PendingSend {
     device_addr: String,
+    device_name: String,
     pkg_name: String,
     data: String,
 }
@@ -88,27 +89,25 @@ pub fn handle_timer_payload(payload: &str) {
 }
 
 pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::event::Event, event_id: &str, event_payload: &str) {
-    tracing::info!("UI Event: type={:?}, id={}, payload={}", event_type, event_id, event_payload);
+    if !is_high_frequency_input_event(event_id) {
+        tracing::info!("UI Event: type={:?}, id={}, payload={}", event_type, event_id, event_payload);
+    }
 
     match event_id {
         INPUT_CHANGE_EVENT => {
             let parsed_value = parse_event_value(event_payload);
-            tracing::info!("INPUT_CHANGE_EVENT, value={}", parsed_value);
             let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
             state.weather_data = parsed_value.clone();
-            tracing::info!("state.weather_data updated to: {}", parsed_value);
         }
         CUSTOM_API_HOST_CHANGE_EVENT => {
             let parsed_value = parse_event_value(event_payload);
             let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
             state.custom_api_host = parsed_value.clone();
-            tracing::info!("state.custom_api_host updated to: {}", parsed_value);
         }
         CUSTOM_API_KEY_CHANGE_EVENT => {
             let parsed_value = parse_event_value(event_payload);
             let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
             state.custom_api_key = parsed_value.clone();
-            tracing::info!("state.custom_api_key updated");
         }
         SEND_BUTTON_EVENT => {
             tracing::info!("SEND_BUTTON_EVENT received");
@@ -320,15 +319,23 @@ fn payload_has_enter(payload: &str) -> bool {
         || payload.contains("Enter")
 }
 
+fn is_high_frequency_input_event(event_id: &str) -> bool {
+    matches!(
+        event_id,
+        INPUT_CHANGE_EVENT
+            | SEARCH_INPUT_CHANGE_EVENT
+            | SEARCH_INPUT_SUBMIT_EVENT
+            | CUSTOM_API_HOST_CHANGE_EVENT
+            | CUSTOM_API_KEY_CHANGE_EVENT
+    )
+}
+
 fn parse_event_value(payload: &str) -> String {
-    tracing::info!("parse_event_value input: {}", payload);
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(payload) {
-        let value = json.get("value")
+        json.get("value")
             .and_then(|v| v.as_str())
             .unwrap_or("")
-            .to_string();
-        tracing::info!("parse_event_value result: '{}'", value);
-        value
+            .to_string()
     } else {
         tracing::warn!("parse_event_value failed to parse JSON");
         payload.to_string()
@@ -541,8 +548,6 @@ fn days_to_api_segment(days: u32) -> &'static str {
     }
 }
 
-
-
 enum SendOutcome {
     Sent,
     Pending,
@@ -558,9 +563,11 @@ async fn send_via_interconnect(data: &str) -> Result<SendOutcome, String> {
         return Err("没有连接的设备".to_string());
     }
 
-    let device_addr = devices.first()
+    let first_device = devices.first()
         .ok_or("没有连接的设备")?
-        .addr.clone();
+        .clone();
+    let device_addr = first_device.addr.clone();
+    let device_name = first_device.name.clone();
 
     tracing::info!("using device: {}", device_addr);
 
@@ -599,7 +606,11 @@ async fn send_via_interconnect(data: &str) -> Result<SendOutcome, String> {
             .await
             .map_err(|e| format!("{:?}", e))?;
         tracing::info!("send_qaic_message completed");
+        let report_result = super::supabase::report_device_to_supabase(&device_addr, &device_name);
         update_last_sync_from_data(&data_str);
+        if let Err(e) = report_result {
+            tracing::warn!("send success but supabase report failed: {}", e);
+        }
         return Ok(SendOutcome::Sent);
     }
 
@@ -608,6 +619,7 @@ async fn send_via_interconnect(data: &str) -> Result<SendOutcome, String> {
         let mut slot = pending_send().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         *slot = Some(PendingSend {
             device_addr: device_addr.clone(),
+            device_name: device_name.clone(),
             pkg_name: pkg_name.to_string(),
             data: data.to_string(),
         });
@@ -715,10 +727,20 @@ fn try_send_pending(addr: String, pkg: String) {
         match send_result {
             Ok(_) => {
                 tracing::info!("pending send completed");
+                let report_result =
+                    super::supabase::report_device_to_supabase(&pending.device_addr, &pending.device_name);
                 record_recent_location_from_paste(&pending.data);
                 HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
                 update_last_sync_from_data(&pending.data);
-                show_alert("成功", "发送成功");
+                if report_result.is_ok() {
+                    show_alert("成功", "发送成功");
+                } else {
+                    tracing::warn!(
+                        "send success but supabase report failed: {}",
+                        report_result.err().unwrap_or_else(|| "未知错误".to_string())
+                    );
+                    show_alert("成功", "发送成功");
+                }
             }
             Err(e) => {
                 tracing::error!("pending send failed: {:?}", e);
@@ -759,10 +781,20 @@ fn try_send_pending_any() {
         match send_result {
             Ok(_) => {
                 tracing::info!("pending send completed (timeout)");
+                let report_result =
+                    super::supabase::report_device_to_supabase(&pending.device_addr, &pending.device_name);
                 record_recent_location_from_paste(&pending.data);
                 HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
                 update_last_sync_from_data(&pending.data);
-                show_alert("成功", "发送成功");
+                if report_result.is_ok() {
+                    show_alert("成功", "发送成功");
+                } else {
+                    tracing::warn!(
+                        "send success but supabase report failed: {}",
+                        report_result.err().unwrap_or_else(|| "未知错误".to_string())
+                    );
+                    show_alert("成功", "发送成功");
+                }
             }
             Err(e) => {
                 tracing::error!("pending send failed (timeout): {:?}", e);
@@ -1367,13 +1399,33 @@ fn http_get_json(url: &str) -> Result<serde_json::Value, String> {
 }
 
 fn http_get_bytes(url: &str) -> Result<(u16, Vec<u8>), String> {
-    tracing::info!("http_get_bytes url={}", url);
+    let headers: Vec<(String, String)> = Vec::new();
+    http_request_bytes("GET", url, &headers, None)
+}
+
+fn http_request_bytes(
+    method: &str,
+    url: &str,
+    headers: &[(String, String)],
+    body: Option<&[u8]>,
+) -> Result<(u16, Vec<u8>), String> {
+    tracing::info!("http_request_bytes method={}, url={}", method, url);
     let url = Url::parse(url).map_err(|e| e.to_string())?;
-    let headers = http_types::Headers::from_list(&[])
+    let header_entries: Vec<(String, Vec<u8>)> = headers
+        .iter()
+        .map(|(k, v)| (k.clone(), v.as_bytes().to_vec()))
+        .collect();
+    let headers = http_types::Headers::from_list(&header_entries)
         .map_err(|e| format!("{:?}", e))?;
     let req = http_types::OutgoingRequest::new(headers);
 
-    req.set_method(&http_types::Method::Get)
+    let http_method = match method {
+        "POST" => http_types::Method::Post,
+        "GET" => http_types::Method::Get,
+        _ => return Err(format!("unsupported method: {}", method)),
+    };
+
+    req.set_method(&http_method)
         .map_err(|()| "failed to set method".to_string())?;
 
     let scheme = match url.scheme() {
@@ -1398,7 +1450,19 @@ fn http_get_bytes(url: &str) -> Result<(u16, Vec<u8>), String> {
     let outgoing_body = req
         .body()
         .map_err(|_| "outgoing request write failed".to_string())?;
-    http_types::OutgoingBody::finish(outgoing_body, None)
+    let maybe_stream = if let Some(body) = body {
+        let stream = outgoing_body
+            .write()
+            .map_err(|_| "open body writer failed".to_string())?;
+        stream
+            .blocking_write_and_flush(body)
+            .map_err(|e| format!("write body failed: {:?}", e))?;
+        drop(stream);
+        None
+    } else {
+        None
+    };
+    http_types::OutgoingBody::finish(outgoing_body, maybe_stream)
         .map_err(|_| "finish body failed".to_string())?;
 
     let future_response = outgoing_handler::handle(req, Some(options))
@@ -1430,7 +1494,7 @@ fn http_get_bytes(url: &str) -> Result<(u16, Vec<u8>), String> {
         match input_stream.blocking_read(1024 * 64) {
             Ok(chunk) => {
                 if chunk.is_empty() {
-                    continue;
+                    break;
                 }
                 body.extend_from_slice(&chunk);
             }

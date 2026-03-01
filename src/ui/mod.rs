@@ -1,6 +1,7 @@
 pub mod state;
 pub mod build;
 pub mod event_handler;
+pub mod supabase;
 
 pub use build::render_main_ui;
 pub use build::render_sync_card;

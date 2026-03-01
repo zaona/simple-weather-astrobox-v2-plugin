@@ -122,22 +122,6 @@ impl lifecycle::Guest for MyPlugin {
         );
         tracing::info!("Simple Interconnect Plugin Loaded!");
 
-        // 异步操作：获取设备列表并注册所有需要的服务
-        wit_bindgen::block_on(async move {
-            let devices = crate::astrobox::psys_host::device::get_connected_device_list().await;
-            tracing::info!("on_load: found {} connected devices", devices.len());
-
-            // 注册interconnect接收功能
-            for device in &devices {
-                tracing::info!("registering interconnect for device: {}", device.addr);
-                let result = crate::astrobox::psys_host::register::register_interconnect_recv(
-                    &device.addr,
-                    "com.application.zaona.weather",
-                ).await;
-                tracing::info!("register interconnect result: {:?}", result);
-            }
-        });
-
         wit_bindgen::block_on(async move {
             let result = crate::astrobox::psys_host::register::register_card(
                 crate::astrobox::psys_host::register::CardType::Text,
