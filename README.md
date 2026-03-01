@@ -34,13 +34,14 @@ update_submodules.bat
 
 ### 构建插件
 
-```bash
-python scripts/build_dist.py
-```
+> 若需启用 Supabase 上报，release强制要求使用本地配置文件（不要提交到仓库）：
+>
+> ```bash
+> cp .env.example .env.local
+> # 然后编辑 .env.local 填入真实值
+> ```
 
-构建完成后，生成的 WASM 文件位于 `dist` 目录。
-
-### 打包插件
+### 开发命令
 
 ```bash
 python scripts/build_dist.py --release --package
@@ -54,12 +55,4 @@ python scripts/build_dist.py --release --package
 python scripts/build_dist.py --release
 ```
 
-有利于用户加载插件，运行完毕后将文件替换到release里。
-
-### 开发命令
-
-```bash
-python scripts/build_dist.py --dev
-```
-
-我在开发的时候输入上面两个命令了114514遍，所以有了这个的开发命令。一个单命令快捷参数 --dev，相当于“构建 + 打包”，默认走 release。
+运行后自动把内容复制到release文件夹，进入生产环境。
