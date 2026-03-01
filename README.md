@@ -34,11 +34,12 @@ update_submodules.bat
 
 ### 构建插件
 
-> 若需启用 Supabase 上报，release强制要求使用本地配置文件（不要提交到仓库）：
+> 若需启用 Supabase 上报与内嵌高级模式默认 API，release 强制要求使用本地配置文件（不要提交到仓库）：
 >
 > ```bash
 > cp .env.example .env.local
-> # 然后编辑 .env.local 填入真实值
+> # 然后编辑 .env.local 填入真实值：
+> # SUPABASE_URL、SUPABASE_PUBLISHABLE_KEY、QWEATHER_API_HOST、QWEATHER_API_KEY
 > ```
 
 ### 开发命令

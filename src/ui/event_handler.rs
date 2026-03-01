@@ -60,7 +60,7 @@ fn pending_send() -> &'static Mutex<Option<PendingSend>> {
 }
 
 pub fn handle_interconnect_message(payload: &str) {
-    tracing::info!("收到快应用消息: {}", payload);
+    tracing::info!("收到快应用消息");
 
     let (addr, pkg, payload_text) = extract_interconnect_fields(payload);
     tracing::info!(
@@ -90,7 +90,8 @@ pub fn handle_timer_payload(payload: &str) {
 
 pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::event::Event, event_id: &str, event_payload: &str) {
     if !is_high_frequency_input_event(event_id) {
-        tracing::info!("UI Event: type={:?}, id={}, payload={}", event_type, event_id, event_payload);
+        let _ = event_payload;
+        tracing::info!("UI Event: type={:?}, id={}", event_type, event_id);
     }
 
     match event_id {
@@ -357,7 +358,6 @@ fn send_weather_data() {
     let weather_data = {
         let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
         let value = state.weather_data.clone();
-        tracing::info!("read state.weather_data: '{}'", value);
         value
     };
 
@@ -381,7 +381,6 @@ fn send_weather_data() {
     tracing::info!("weather_data has content, starting send");
 
     let data = weather_data.clone();
-    tracing::info!("data to send: '{}'", data);
 
     wit_bindgen::block_on(async move {
         tracing::info!("inside block_on");
@@ -452,11 +451,20 @@ fn validate_paste_weather_data(data: &str) -> Result<(), String> {
 }
 
 fn send_weather_data_advanced() {
-    let (host, key, location_id, location_name, location_adm1, location_adm2, location_lat, location_lon, days, use_custom_api, selected_from_search) = {
+    let (
+        api,
+        location_id,
+        location_name,
+        location_adm1,
+        location_adm2,
+        location_lat,
+        location_lon,
+        days,
+        selected_from_search,
+    ) = {
         let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
         (
-            state.custom_api_host.clone(),
-            state.custom_api_key.clone(),
+            effective_api_host_key(&state),
             state.selected_location_id.clone(),
             state.selected_location_name.clone(),
             state.selected_location_adm1.clone(),
@@ -464,19 +472,14 @@ fn send_weather_data_advanced() {
             state.selected_location_lat.clone(),
             state.selected_location_lon.clone(),
             state.selected_days,
-            state.use_custom_api,
             state.selected_from_search,
         )
     };
 
-    if !use_custom_api {
-        show_alert("提示", "请先启用自定义API");
-        return;
-    }
-    if host.trim().is_empty() || key.trim().is_empty() {
+    let Some((host, key)) = api else {
         show_alert("提示", "请先在设置中配置自定义API");
         return;
-    }
+    };
     if location_id.is_empty() && (location_lat.is_empty() || location_lon.is_empty()) {
         show_alert("提示", "请先选择位置");
         return;
@@ -490,12 +493,11 @@ fn send_weather_data_advanced() {
     let days_segment = days_to_api_segment(days);
     let url = format!(
         "https://{}/v7/weather/{}?location={}&key={}",
-        host.trim(),
+        host,
         days_segment,
         location_param,
-        key.trim()
+        key
     );
-    tracing::info!("advanced weather url={}", url);
 
     let recent_location = LocationOption {
         id: location_id,
@@ -554,7 +556,7 @@ enum SendOutcome {
 }
 
 async fn send_via_interconnect(data: &str) -> Result<SendOutcome, String> {
-    tracing::info!("send_via_interconnect start, data={}", data);
+    tracing::info!("send_via_interconnect start");
 
     let devices = psys_host::device::get_connected_device_list().await;
     tracing::info!("get_connected_device_list returned {} devices", devices.len());
@@ -994,9 +996,10 @@ fn save_and_test_custom_api() {
         Ok(_) => {
             {
                 let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
-                state.use_custom_api = true;
                 state.custom_api_host = host.trim().to_string();
                 state.custom_api_key = key.trim().to_string();
+                refresh_api_state(&mut state);
+                auto_enable_advanced_mode_if_api_ready(&mut state);
             }
             if let Err(e) = crate::ui::state::save_all_settings() {
                 show_alert("保存失败", &format!("写入配置失败: {}", e));
@@ -1013,12 +1016,13 @@ fn save_and_test_custom_api() {
 fn reset_custom_api() {
     {
         let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.use_custom_api = false;
         state.custom_api_host.clear();
         state.custom_api_key.clear();
+        refresh_api_state(&mut state);
+        auto_enable_advanced_mode_if_api_ready(&mut state);
     }
-    if let Err(e) = crate::ui::state::clear_api_settings() {
-        show_alert("重置失败", &format!("清理配置失败: {}", e));
+    if let Err(e) = crate::ui::state::save_all_settings() {
+        show_alert("重置失败", &format!("写入配置失败: {}", e));
     } else {
         show_alert("重置成功", "已恢复默认配置");
     }
@@ -1037,14 +1041,12 @@ fn test_custom_api_connection(host: &str, key: &str) -> Result<(), String> {
     }
 
     let url = format!("https://{}/geo/v2/city/lookup?location=北京&key={}", host, key);
-    tracing::info!("test_custom_api_connection url={}", url);
     let (status_code, body) = http_get_bytes(&url)?;
     tracing::info!(
         "test_custom_api_connection status={}, body_len={}",
         status_code,
         body.len()
     );
-    log_body_preview("test_custom_api_connection", &body);
 
     if status_code != 200 {
         return match status_code {
@@ -1073,30 +1075,21 @@ fn test_custom_api_connection(host: &str, key: &str) -> Result<(), String> {
 }
 
 fn search_locations() {
-    let (host, key, query, use_custom_api) = {
+    let (api, query) = {
         let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
-        (
-            state.custom_api_host.clone(),
-            state.custom_api_key.clone(),
-            state.search_query.clone(),
-            state.use_custom_api,
-        )
+        (effective_api_host_key(&state), state.search_query.clone())
     };
 
-    if !use_custom_api {
-        show_alert("提示", "请先启用自定义API");
-        return;
-    }
-    if host.trim().is_empty() || key.trim().is_empty() {
+    let Some((host, key)) = api else {
         show_alert("提示", "请先在设置中配置自定义API");
         return;
-    }
+    };
     if query.trim().is_empty() {
         show_alert("提示", "请输入城市名称");
         return;
     }
 
-    let base = format!("https://{}/geo/v2/city/lookup", host.trim());
+    let base = format!("https://{}/geo/v2/city/lookup", host);
     let url = match Url::parse_with_params(&base, &[("location", query), ("key", key)]) {
         Ok(u) => u.to_string(),
         Err(e) => {
@@ -1211,6 +1204,7 @@ fn record_recent_location(location: LocationOption) {
     }
     drop(state);
     let _ = crate::ui::state::save_all_settings();
+    resolve_recent_locations_if_needed();
     crate::ui::build::rerender_main_ui();
 }
 
@@ -1261,12 +1255,10 @@ fn extract_location_id_from_fxlink(link: &str) -> Option<String> {
 }
 
 pub fn resolve_recent_locations_if_needed() {
-    let (host, key, use_custom_api, recent, selected_id, resolving, advanced_mode, current_tab) = {
+    let (api, recent, selected_id, resolving, advanced_mode, current_tab) = {
         let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
         (
-            state.custom_api_host.clone(),
-            state.custom_api_key.clone(),
-            state.use_custom_api,
+            effective_api_host_key(&state),
             state.recent_locations.clone(),
             state.selected_location_id.clone(),
             state.recent_resolving,
@@ -1278,12 +1270,12 @@ pub fn resolve_recent_locations_if_needed() {
     if resolving {
         return;
     }
-    if !use_custom_api || !advanced_mode || current_tab != MainTab::PasteData {
+    if !advanced_mode || current_tab != MainTab::PasteData {
         return;
     }
-    if host.trim().is_empty() || key.trim().is_empty() {
+    let Some((host, key)) = api else {
         return;
-    }
+    };
 
     let pending: Vec<LocationOption> = recent
         .into_iter()
@@ -1306,7 +1298,7 @@ pub fn resolve_recent_locations_if_needed() {
     let mut updates: Vec<(String, LocationOption)> = Vec::new();
     for item in pending {
         let query_id = item.id.clone();
-        let base = format!("https://{}/geo/v2/city/lookup", host.trim());
+        let base = format!("https://{}/geo/v2/city/lookup", host);
         let url = match Url::parse_with_params(&base, &[("location", query_id.clone()), ("key", key.clone())]) {
             Ok(u) => u.to_string(),
             Err(_) => continue,
@@ -1384,7 +1376,6 @@ fn clear_search_after_sync() {
 }
 
 fn http_get_json(url: &str) -> Result<serde_json::Value, String> {
-    tracing::info!("http_get_json url={}", url);
     let (status, body) = http_get_bytes(url)?;
     tracing::info!("http_get_json status={}, body_len={}", status, body.len());
     log_body_preview("http_get_json", &body);
@@ -1409,7 +1400,7 @@ fn http_request_bytes(
     headers: &[(String, String)],
     body: Option<&[u8]>,
 ) -> Result<(u16, Vec<u8>), String> {
-    tracing::info!("http_request_bytes method={}, url={}", method, url);
+    tracing::info!("http_request_bytes method={}", method);
     let url = Url::parse(url).map_err(|e| e.to_string())?;
     let header_entries: Vec<(String, Vec<u8>)> = headers
         .iter()
@@ -1511,15 +1502,9 @@ fn log_body_preview(tag: &str, body: &[u8]) {
         tracing::info!("{} body_preview: <empty>", tag);
         return;
     }
-    let preview_len = body.len().min(200);
+    let preview_len = body.len().min(400);
     let preview = String::from_utf8_lossy(&body[..preview_len]);
-    let hex_len = body.len().min(64);
-    let mut hex = String::new();
-    for b in &body[..hex_len] {
-        hex.push_str(&format!("{:02x}", b));
-    }
     tracing::info!("{} body_preview_utf8: {}", tag, preview);
-    tracing::info!("{} body_preview_hex: {}", tag, hex);
 }
 
 fn maybe_decompress(body: Vec<u8>) -> Result<Vec<u8>, String> {
