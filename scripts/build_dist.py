@@ -10,6 +10,34 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+def load_local_env(root_dir):
+    env_path = root_dir / ".env.local"
+    if not env_path.exists():
+        return {}
+
+    values = {}
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+
+        if (value.startswith('"') and value.endswith('"')) or (
+            value.startswith("'") and value.endswith("'")
+        ):
+            value = value[1:-1]
+
+        values[key] = value
+
+    return values
+
+
 def run_cargo_build(root_dir, cargo_args, env):
     cmd = ["cargo", "build", *cargo_args]
     result = subprocess.run(cmd, cwd=root_dir, env=env)
@@ -126,6 +154,26 @@ def package_dist(dist_dir, output_path):
         for path in files:
             archive.write(path, path.relative_to(dist_dir))
 
+
+def sync_dist_to_release(root_dir, dist_dir):
+    release_dir = root_dir / "release"
+    release_dir.mkdir(parents=True, exist_ok=True)
+
+    for child in release_dir.iterdir():
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+    for item in dist_dir.iterdir():
+        if item.is_file() and item.suffix.lower() == ".abp":
+            continue
+        dest = release_dir / item.name
+        if item.is_dir():
+            shutil.copytree(item, dest)
+        else:
+            shutil.copy2(item, dest)
+
 def get_git_output(root_dir, args):
     result = subprocess.run(
         ["git", *args],
@@ -171,20 +219,10 @@ def main():
         action="store_true",
         help="Package dist into <name>.abp",
     )
-    parser.add_argument(
-        "--dev",
-        action="store_true",
-        help="Build (release by default) and package in one command",
-    )
     args, extra = parser.parse_known_args()
 
     cargo_args = []
     profile = "debug"
-
-    if args.dev:
-        args.package = True
-        if not args.profile and not args.release:
-            args.release = True
 
     if args.profile:
         cargo_args.extend(["--profile", args.profile])
@@ -212,6 +250,31 @@ def main():
     additional = manifest.get("additional_files") or []
 
     env = os.environ.copy()
+    env_local_path = root_dir / ".env.local"
+    if not env_local_path.exists():
+        if args.release and not args.package:
+            sys.stderr.write(
+                "warning: 项目根目录未找到 .env.local。\n"
+                "warning: 当前执行的是 `python scripts/build_dist.py --release`，"
+                "该命令会让打包结果进入生产环境，但缺少 Supabase 配置，已阻止本次 release 构建。\n"
+                "warning: 如果只是日常开发和调试，请使用 "
+                "`python scripts/build_dist.py --release --package`。\n"
+                "warning: 请参考 .env.example 创建 .env.local，配置 "
+                "SUPABASE_URL 和 SUPABASE_PUBLISHABLE_KEY（该文件不会随 Git 提交）。\n"
+            )
+            sys.exit(1)
+
+        sys.stderr.write(
+            "warning: 项目根目录未找到 .env.local。"
+            "该插件使用 Supabase 上报，请参考 .env.example 创建 .env.local，"
+            "并在其中配置 SUPABASE_URL 和 SUPABASE_PUBLISHABLE_KEY"
+            "（该文件不会随 Git 提交）。"
+            "当前将继续构建。\n"
+        )
+
+    local_env = load_local_env(root_dir)
+    for key, value in local_env.items():
+        env.setdefault(key, value)
     env.update(collect_build_info(root_dir))
     run_cargo_build(root_dir, cargo_args, env)
 
@@ -257,6 +320,9 @@ def main():
         package_name = make_package_name(plugin_name, crate_name)
         package_path = dist_dir / f"{package_name}.abp"
         package_dist(dist_dir, package_path)
+
+    if args.release and not args.package:
+        sync_dist_to_release(root_dir, dist_dir)
 
 
 if __name__ == "__main__":
