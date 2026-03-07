@@ -74,17 +74,10 @@ pub fn report_device_to_supabase(device_addr: &str, device_name: &str) -> Result
 
 fn normalize_device_name(device_name: &str) -> Option<String> {
     let mut name = device_name.trim().to_string();
-    if name.len() >= 5 {
-        let suffix = &name[name.len() - 5..];
-        let bytes = suffix.as_bytes();
-        if bytes[0] == b' '
-            && bytes[1].is_ascii_digit()
-            && bytes[2].is_ascii_digit()
-            && bytes[3].is_ascii_digit()
-            && bytes[4].is_ascii_digit()
-        {
-            name.truncate(name.len() - 5);
-            name = name.trim_end().to_string();
+
+    if let Some((prefix, suffix)) = name.rsplit_once(' ') {
+        if suffix.len() == 4 && suffix.chars().all(|c| c.is_ascii_alphanumeric()) {
+            name = prefix.trim_end().to_string();
         }
     }
 
