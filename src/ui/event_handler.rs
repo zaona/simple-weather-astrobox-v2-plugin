@@ -45,6 +45,7 @@ static LAST_READY_TS_MS: AtomicU64 = AtomicU64::new(0);
 static HANDSHAKE_RUNNING: AtomicBool = AtomicBool::new(false);
 static PENDING_TIMER_ID: AtomicU64 = AtomicU64::new(0);
 const PENDING_SEND_TIMEOUT_MS: u64 = 1200;
+static DEEPLINK_RESTORE_ADV_MODE: OnceLock<Mutex<Option<bool>>> = OnceLock::new();
 
 struct PendingSend {
     device_addr: String,
@@ -57,6 +58,58 @@ static PENDING_SEND: OnceLock<Mutex<Option<PendingSend>>> = OnceLock::new();
 
 fn pending_send() -> &'static Mutex<Option<PendingSend>> {
     PENDING_SEND.get_or_init(|| Mutex::new(None))
+}
+
+fn deeplink_restore_mode() -> &'static Mutex<Option<bool>> {
+    DEEPLINK_RESTORE_ADV_MODE.get_or_init(|| Mutex::new(None))
+}
+
+pub fn handle_deeplink_payload(payload: &str) {
+    tracing::info!("handle_deeplink_payload: len={}", payload.len());
+
+    {
+        let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut restore = deeplink_restore_mode()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if restore.is_none() {
+            *restore = Some(state.advanced_mode);
+        }
+
+        state.weather_data = payload.to_string();
+        state.current_tab = MainTab::PasteData;
+        state.advanced_mode = false;
+    }
+
+    crate::ui::build::rerender_main_ui();
+    send_weather_data();
+}
+
+fn restore_mode_after_deeplink_sync_if_needed() {
+    let previous_advanced_mode = {
+        let mut restore = deeplink_restore_mode()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        restore.take()
+    };
+
+    let Some(previous_advanced_mode) = previous_advanced_mode else {
+        return;
+    };
+
+    let should_rerender = {
+        let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.advanced_mode != previous_advanced_mode {
+            state.advanced_mode = previous_advanced_mode;
+            true
+        } else {
+            false
+        }
+    };
+
+    if should_rerender {
+        crate::ui::build::rerender_main_ui();
+    }
 }
 
 pub fn handle_interconnect_message(payload: &str) {
@@ -366,6 +419,7 @@ fn send_weather_data() {
     if weather_data.is_empty() {
         tracing::warn!("weather_data is empty, showing alert");
         show_alert("提示", "请先粘贴天气数据");
+        restore_mode_after_deeplink_sync_if_needed();
         return;
     }
 
@@ -375,6 +429,7 @@ fn send_weather_data() {
             "提示",
             "天气数据粘贴不全，建议使用自定义api启用高级同步模式，或者使用微信输入法等可完整复制粘贴内容的输入法。",
         );
+        restore_mode_after_deeplink_sync_if_needed();
         return;
     }
 
@@ -390,6 +445,7 @@ fn send_weather_data() {
                 tracing::info!("send_via_interconnect success");
                 record_recent_location_from_paste(&data);
                 show_alert("成功", "发送成功");
+                restore_mode_after_deeplink_sync_if_needed();
             }
             Ok(SendOutcome::Pending) => {
                 tracing::info!("send_via_interconnect pending; waiting for ready");
@@ -397,6 +453,7 @@ fn send_weather_data() {
             Err(e) => {
                 tracing::error!("send_via_interconnect error: {}", e);
                 show_alert("失败", &format!("发送失败: {}", e));
+                restore_mode_after_deeplink_sync_if_needed();
             }
         }
     });
@@ -743,11 +800,13 @@ fn try_send_pending(addr: String, pkg: String) {
                     );
                     show_alert("成功", "发送成功");
                 }
+                restore_mode_after_deeplink_sync_if_needed();
             }
             Err(e) => {
                 tracing::error!("pending send failed: {:?}", e);
                 HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
                 show_alert("失败", &format!("发送失败: {:?}", e));
+                restore_mode_after_deeplink_sync_if_needed();
             }
         }
     });
@@ -797,11 +856,13 @@ fn try_send_pending_any() {
                     );
                     show_alert("成功", "发送成功");
                 }
+                restore_mode_after_deeplink_sync_if_needed();
             }
             Err(e) => {
                 tracing::error!("pending send failed (timeout): {:?}", e);
                 HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
                 show_alert("失败", &format!("发送失败: {:?}", e));
+                restore_mode_after_deeplink_sync_if_needed();
             }
         }
     });

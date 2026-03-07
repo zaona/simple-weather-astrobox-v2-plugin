@@ -43,15 +43,15 @@ impl event::Guest for MyPlugin {
             event::EventType::DeeplinkAction => {
                 // 处理deeplink数据
                 tracing::info!("Received deeplink data via DeeplinkAction: {}", event_payload);
-                // 将数据传递给UI状态
-                ui::state::set_weather_data_from_deeplink(&event_payload);
+                // deeplink到达后临时切换到粘贴同步并自动发送，完成后恢复原模式
+                ui::event_handler::handle_deeplink_payload(&event_payload);
             }
             // 尝试处理可能的其他命名变体
             _ => {
                 // 检查事件负载是否包含deeplink相关数据
                 if event_payload.contains("source=plugdata") {
                     tracing::info!("Received deeplink-like data in unknown event type: {:?}", event_type);
-                    ui::state::set_weather_data_from_deeplink(&event_payload);
+                    ui::event_handler::handle_deeplink_payload(&event_payload);
                 }
             }
         }
