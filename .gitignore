@@ -9,3 +9,5 @@ dist
 /Debug-Helper-AstroBox-Plugin
 .env.local
 /scripts/__pycache__
+API.md
+.codex
