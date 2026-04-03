@@ -14,22 +14,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub const INPUT_CHANGE_EVENT: &str = "input_change";
 pub const SEND_BUTTON_EVENT: &str = "send_button";
-pub const OPEN_WEATHER_EVENT: &str = "open_weather";
-pub const OPEN_GUIDE_EVENT: &str = "open_guide";
 pub const TAB_PASTE_EVENT: &str = "tab_paste";
 pub const TAB_SETTINGS_EVENT: &str = "tab_settings";
-pub const CUSTOM_API_HOST_CHANGE_EVENT: &str = "custom_api_host_change";
-pub const CUSTOM_API_KEY_CHANGE_EVENT: &str = "custom_api_key_change";
-pub const API_SAVE_TEST_EVENT: &str = "api_save_test";
-pub const API_RESET_EVENT: &str = "api_reset";
-pub const API_HELP_EVENT: &str = "api_help";
-pub const TOGGLE_SHOW_API_HOST_EVENT: &str = "toggle_show_api_host";
-pub const TOGGLE_SHOW_API_KEY_EVENT: &str = "toggle_show_api_key";
-pub const OPEN_SETTINGS_API_EVENT: &str = "open_settings_api";
-pub const SETTINGS_BACK_EVENT: &str = "settings_back";
-pub const ADV_MODE_TOGGLE_EVENT: &str = "adv_mode_toggle";
+pub const HOURLY_SYNC_TOGGLE_EVENT: &str = "hourly_sync_toggle";
 pub const OPEN_HELP_DOC_EVENT: &str = "open_help_doc";
 pub const OPEN_QQ_GROUP_EVENT: &str = "open_qq_group";
 pub const OPEN_AFD_EVENT: &str = "open_afd";
@@ -45,6 +33,8 @@ static LAST_READY_TS_MS: AtomicU64 = AtomicU64::new(0);
 static HANDSHAKE_RUNNING: AtomicBool = AtomicBool::new(false);
 static PENDING_TIMER_ID: AtomicU64 = AtomicU64::new(0);
 const PENDING_SEND_TIMEOUT_MS: u64 = 1200;
+const WEATHER_SYNC_SOURCE: &str = "ab_plugin_v2";
+const WEATHER_SYNC_HOURLY_RANGE: &str = "72h";
 
 struct PendingSend {
     device_addr: String,
@@ -95,21 +85,6 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
     }
 
     match event_id {
-        INPUT_CHANGE_EVENT => {
-            let parsed_value = parse_event_value(event_payload);
-            let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.weather_data = parsed_value.clone();
-        }
-        CUSTOM_API_HOST_CHANGE_EVENT => {
-            let parsed_value = parse_event_value(event_payload);
-            let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.custom_api_host = parsed_value.clone();
-        }
-        CUSTOM_API_KEY_CHANGE_EVENT => {
-            let parsed_value = parse_event_value(event_payload);
-            let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.custom_api_key = parsed_value.clone();
-        }
         SEND_BUTTON_EVENT => {
             tracing::info!("SEND_BUTTON_EVENT received");
             send_weather_data();
@@ -143,60 +118,6 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
                 crate::ui::build::rerender_main_ui();
             }
         }
-        OPEN_WEATHER_EVENT => {
-            tracing::info!("Handling open weather event, checking deeplink permission first...");
-            
-            // 首先检查状态中是否已注册深度链接
-            if crate::ui::state::is_deeplink_registered() {
-                tracing::info!("DeepLink action already registered in state, opening weather website");
-                open_weather_website();
-            } else {
-                // 在打开浏览器前检查并请求深度链接权限
-                wit_bindgen::block_on(async move {
-                    // 检查深度链接权限状态
-                    match register::register_deeplink_action().await {
-                        Ok(_) => {
-                            tracing::info!("DeepLink action registered, updating state and opening weather website");
-                            // 更新状态为已注册
-                            crate::ui::state::set_deeplink_registered(true);
-                            open_weather_website();
-                        },
-                        Err(e) => {
-                            tracing::info!("DeepLink action not registered, showing permission dialog: {:?}", e);
-                            
-                            // 创建对话框配置（仅保留确认按钮）
-                            let confirm_btn = dialog::DialogButton {
-                                id: "confirm".to_string(),
-                                primary: true,
-                                content: "同意并启用".to_string(),
-                            };
-                            
-                            let dialog_info = dialog::DialogInfo {
-                                title: "深度链接权限请求".to_string(),
-                                content: "该插件需要深度链接权限来接收天气数据。请点击\"同意并启用\"以允许插件接收外部应用发送的天气信息。".to_string(),
-                                buttons: vec![confirm_btn],
-                            };
-                            
-                            // 显示对话框请求用户授权（使用Website样式）
-                            let _result = dialog::show_dialog(
-                                dialog::DialogType::Alert,
-                                dialog::DialogStyle::Website,
-                                &dialog_info
-                            ).await;
-                            
-                            // 用户点击了确认按钮（唯一的按钮）
-                            tracing::info!("User confirmed deeplink permission request");
-                            // 用户同意后，我们假设权限已经获得，直接打开网站
-                            tracing::info!("User granted permission, opening weather website");
-                            open_weather_website();
-                        },
-                    }
-                });
-            }
-        }
-        OPEN_GUIDE_EVENT => {
-            open_guide_page();
-        }
         OPEN_HELP_DOC_EVENT => {
             open_help_doc_page();
         }
@@ -206,44 +127,14 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
         OPEN_AFD_EVENT => {
             open_afd_page();
         }
-        API_SAVE_TEST_EVENT => {
-            save_and_test_custom_api();
-        }
-        API_RESET_EVENT => {
-            reset_custom_api();
-        }
-        API_HELP_EVENT => {
-            open_api_help_page();
-        }
-        OPEN_SETTINGS_API_EVENT => {
+        HOURLY_SYNC_TOGGLE_EVENT => {
             let should_rerender = {
                 let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
-                state.settings_page = SettingsPage::Api;
-                true
-            };
-            if should_rerender {
-                crate::ui::build::rerender_main_ui();
-            }
-        }
-        SETTINGS_BACK_EVENT => {
-            let should_rerender = {
-                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
-                state.settings_page = SettingsPage::Main;
-                true
-            };
-            if should_rerender {
-                crate::ui::build::rerender_main_ui();
-            }
-        }
-        ADV_MODE_TOGGLE_EVENT => {
-            let should_rerender = {
-                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
-                state.advanced_mode = !state.advanced_mode;
+                state.sync_hourly_enabled = !state.sync_hourly_enabled;
                 true
             };
             if should_rerender {
                 let _ = crate::ui::state::save_all_settings();
-                resolve_recent_locations_if_needed();
                 crate::ui::build::rerender_main_ui();
             }
         }
@@ -264,26 +155,6 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
         }
         SEARCH_BUTTON_EVENT => {
             search_locations();
-        }
-        TOGGLE_SHOW_API_HOST_EVENT => {
-            let should_rerender = {
-                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
-                state.show_api_host = !state.show_api_host;
-                true
-            };
-            if should_rerender {
-                crate::ui::build::rerender_main_ui();
-            }
-        }
-        TOGGLE_SHOW_API_KEY_EVENT => {
-            let should_rerender = {
-                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
-                state.show_api_key = !state.show_api_key;
-                true
-            };
-            if should_rerender {
-                crate::ui::build::rerender_main_ui();
-            }
         }
 
         _ => {}
@@ -323,136 +194,60 @@ fn payload_has_enter(payload: &str) -> bool {
 fn is_high_frequency_input_event(event_id: &str) -> bool {
     matches!(
         event_id,
-        INPUT_CHANGE_EVENT
-            | SEARCH_INPUT_CHANGE_EVENT
+        SEARCH_INPUT_CHANGE_EVENT
             | SEARCH_INPUT_SUBMIT_EVENT
-            | CUSTOM_API_HOST_CHANGE_EVENT
-            | CUSTOM_API_KEY_CHANGE_EVENT
     )
 }
 
 fn parse_event_value(payload: &str) -> String {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(payload) {
-        json.get("value")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string()
+        if let Some(value) = extract_event_value(&json) {
+            return value.trim().to_string();
+        }
+        tracing::warn!("parse_event_value parsed JSON but found no usable text field");
+        String::new()
     } else {
-        tracing::warn!("parse_event_value failed to parse JSON");
-        payload.to_string()
+        payload.trim().to_string()
     }
+}
+
+fn extract_event_value(value: &serde_json::Value) -> Option<String> {
+    if let Some(text) = value.as_str() {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    let preferred_keys = ["value", "text", "content", "label"];
+    for key in preferred_keys {
+        if let Some(text) = value.get(key).and_then(|v| v.as_str()) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+
+    let nested_keys = ["detail", "target", "currentTarget", "data"];
+    for key in nested_keys {
+        if let Some(nested) = value.get(key) {
+            if let Some(text) = extract_event_value(nested) {
+                return Some(text);
+            }
+        }
+    }
+
+    None
 }
 
 fn send_weather_data() {
     tracing::info!("send_weather_data called");
-
-    let advanced_mode = {
-        let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.advanced_mode
-    };
-    if advanced_mode {
-        send_weather_data_advanced();
-        return;
-    }
-
-    let weather_data = {
-        let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let value = state.weather_data.clone();
-        value
-    };
-
-    tracing::info!("weather_data.is_empty(): {}", weather_data.is_empty());
-
-    if weather_data.is_empty() {
-        tracing::warn!("weather_data is empty, showing alert");
-        show_alert("提示", "请先粘贴天气数据");
-        return;
-    }
-
-    if let Err(reason) = validate_paste_weather_data(&weather_data) {
-        tracing::warn!("paste weather data validation failed: {}", reason);
-        show_alert(
-            "提示",
-            "天气数据粘贴不全，建议使用自定义api启用高级同步模式，或者使用微信输入法等可完整复制粘贴内容的输入法。",
-        );
-        return;
-    }
-
-    tracing::info!("weather_data has content, starting send");
-
-    let data = weather_data.clone();
-
-    wit_bindgen::block_on(async move {
-        tracing::info!("inside block_on");
-
-        match send_via_interconnect(&data).await {
-            Ok(SendOutcome::Sent) => {
-                tracing::info!("send_via_interconnect success");
-                record_recent_location_from_paste(&data);
-                show_alert("成功", "发送成功");
-            }
-            Ok(SendOutcome::Pending) => {
-                tracing::info!("send_via_interconnect pending; waiting for ready");
-            }
-            Err(e) => {
-                tracing::error!("send_via_interconnect error: {}", e);
-                show_alert("失败", &format!("发送失败: {}", e));
-            }
-        }
-    });
-}
-
-fn validate_paste_weather_data(data: &str) -> Result<(), String> {
-    let trimmed = data.trim();
-    if trimmed.is_empty() {
-        return Err("empty payload".to_string());
-    }
-
-    let json = serde_json::from_str::<serde_json::Value>(trimmed)
-        .map_err(|e| format!("invalid json: {}", e))?;
-    let obj = json
-        .as_object()
-        .ok_or_else(|| "json root is not an object".to_string())?;
-
-    let has_main_weather = obj
-        .get("daily")
-        .and_then(|v| v.as_array())
-        .map(|v| !v.is_empty())
-        .unwrap_or(false)
-        || obj.get("now").and_then(|v| v.as_object()).is_some()
-        || obj
-            .get("hourly")
-            .and_then(|v| v.as_array())
-            .map(|v| !v.is_empty())
-            .unwrap_or(false);
-
-    let has_location_marker = obj
-        .get("fxLink")
-        .and_then(|v| v.as_str())
-        .map(|s| !s.trim().is_empty())
-        .unwrap_or(false)
-        || obj
-            .get("location")
-            .and_then(|v| v.get("fxLink"))
-            .and_then(|v| v.as_str())
-            .map(|s| !s.trim().is_empty())
-            .unwrap_or(false)
-        || obj
-            .get("location")
-            .and_then(|v| v.as_str())
-            .map(|s| !s.trim().is_empty())
-            .unwrap_or(false);
-
-    if has_main_weather || has_location_marker {
-        Ok(())
-    } else {
-        Err("missing weather keys".to_string())
-    }
+    send_weather_data_advanced();
 }
 
 fn send_weather_data_advanced() {
     let (
-        api,
         location_id,
         location_name,
         location_adm1,
@@ -460,11 +255,11 @@ fn send_weather_data_advanced() {
         location_lat,
         location_lon,
         days,
+        sync_hourly_enabled,
         selected_from_search,
     ) = {
         let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
         (
-            effective_api_host_key(&state),
             state.selected_location_id.clone(),
             state.selected_location_name.clone(),
             state.selected_location_adm1.clone(),
@@ -472,35 +267,35 @@ fn send_weather_data_advanced() {
             state.selected_location_lat.clone(),
             state.selected_location_lon.clone(),
             state.selected_days,
+            state.sync_hourly_enabled,
             state.selected_from_search,
         )
     };
 
-    let Some((host, key)) = api else {
-        show_alert("提示", "请先在设置中配置自定义API");
-        return;
-    };
-    if location_id.is_empty() && (location_lat.is_empty() || location_lon.is_empty()) {
-        show_alert("提示", "请先选择位置");
-        return;
-    }
+    let sync_location_id =
+        match ensure_sync_location_id(&location_id, &location_lat, &location_lon) {
+            Ok(value) => value,
+            Err(message) => {
+                show_alert("提示", &message);
+                return;
+            }
+        };
 
-    let location_param = if !location_lon.is_empty() && !location_lat.is_empty() {
-        format!("{},{}", location_lon, location_lat)
-    } else {
-        location_id.clone()
-    };
-    let days_segment = days_to_api_segment(days);
-    let url = format!(
-        "https://{}/v7/weather/{}?location={}&key={}",
-        host,
-        days_segment,
-        location_param,
-        key
-    );
+    let payload_json = serde_json::json!({
+        "source": WEATHER_SYNC_SOURCE,
+        "locationId": sync_location_id,
+        "modules": {
+            "daily": days_to_api_segment(days),
+            "hourly": if sync_hourly_enabled {
+                serde_json::Value::String(WEATHER_SYNC_HOURLY_RANGE.to_string())
+            } else {
+                serde_json::Value::Null
+            }
+        }
+    });
 
     let recent_location = LocationOption {
-        id: location_id,
+        id: sync_location_id,
         name: location_name,
         adm1: location_adm1,
         adm2: location_adm2,
@@ -508,11 +303,12 @@ fn send_weather_data_advanced() {
         lon: location_lon,
     };
 
-    match http_get_json(&url) {
+    match http_post_json(&api_url("/api/weather/sync"), &payload_json) {
         Ok(mut json) => {
             json["location"] = serde_json::Value::String(recent_location.name.clone());
             let payload = json.to_string();
             let recent_location = recent_location.clone();
+            mark_sync_started(&payload, &recent_location);
             wit_bindgen::block_on(async move {
                 match send_via_interconnect(&payload).await {
                     Ok(SendOutcome::Sent) => {
@@ -537,6 +333,60 @@ fn send_weather_data_advanced() {
             show_alert("失败", &format!("获取天气失败: {}", e));
         }
     }
+}
+
+fn mark_sync_started(payload: &str, location: &LocationOption) {
+    let location_name = if !location.name.trim().is_empty() {
+        location.name.trim().to_string()
+    } else {
+        extract_location_from_payload(payload).unwrap_or_default()
+    };
+
+    let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+    state.last_sync_time_ms = now_ms();
+    if !location_name.is_empty() {
+        state.last_sync_location = location_name;
+    }
+    drop(state);
+    crate::ui::render_sync_card(crate::ui::SYNC_CARD_ID);
+}
+
+fn ensure_sync_location_id(
+    location_id: &str,
+    location_lat: &str,
+    location_lon: &str,
+) -> Result<String, String> {
+    let trimmed_id = location_id.trim();
+    if !trimmed_id.is_empty() && !trimmed_id.contains(',') {
+        return Ok(trimmed_id.to_string());
+    }
+
+    let lookup = if !location_lat.trim().is_empty() && !location_lon.trim().is_empty() {
+        format!("{},{}", location_lat.trim(), location_lon.trim())
+    } else if trimmed_id.contains(',') {
+        trimmed_id.to_string()
+    } else {
+        return Err("请先选择位置".to_string());
+    };
+
+    let location = fetch_first_location(&lookup)?;
+    if location.id.trim().is_empty() {
+        return Err("位置解析失败".to_string());
+    }
+
+    Ok(location.id)
+}
+
+fn api_url(path: &str) -> String {
+    format!(
+        "{}{}",
+        server_api_base().trim_end_matches('/'),
+        if path.starts_with('/') {
+            path.to_string()
+        } else {
+            format!("/{}", path)
+        }
+    )
 }
 
 fn days_to_api_segment(days: u32) -> &'static str {
@@ -913,33 +763,6 @@ async fn ensure_quick_app_launched(device_addr: &str, pkg_name: &str, page_name:
     Ok(())
 }
 
-fn open_weather_website() {
-    tracing::info!("open_weather_website called");
-
-    let url = "https://weather.zaona.top/weather";
-
-    dialog::open_url(url);
-    tracing::info!("opened weather website: {}", url);
-}
-
-fn open_guide_page() {
-    tracing::info!("open_guide_page called");
-
-    let url = "https://www.yuque.com/zaona/weather/plugin";
-
-    dialog::open_url(url);
-    tracing::info!("opened guide page: {}", url);
-}
-
-fn open_api_help_page() {
-    tracing::info!("open_api_help_page called");
-
-    let url = "https://www.yuque.com/zaona/weather/api";
-
-    dialog::open_url(url);
-    tracing::info!("opened api help page: {}", url);
-}
-
 fn open_help_doc_page() {
     tracing::info!("open_help_doc_page called");
     let url = "https://www.yuque.com/zaona/weather";
@@ -986,111 +809,19 @@ fn show_alert(title: &str, message: &str) {
     });
 }
 
-fn save_and_test_custom_api() {
-    let (host, key) = {
-        let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
-        (state.custom_api_host.clone(), state.custom_api_key.clone())
-    };
-
-    match test_custom_api_connection(&host, &key) {
-        Ok(_) => {
-            {
-                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
-                state.custom_api_host = host.trim().to_string();
-                state.custom_api_key = key.trim().to_string();
-                refresh_api_state(&mut state);
-                auto_enable_advanced_mode_if_api_ready(&mut state);
-            }
-            if let Err(e) = crate::ui::state::save_all_settings() {
-                show_alert("保存失败", &format!("写入配置失败: {}", e));
-            } else {
-                show_alert("保存成功", "配置已保存并验证通过");
-            }
-        }
-        Err(message) => {
-            show_alert("验证失败", &message);
-        }
-    }
-}
-
-fn reset_custom_api() {
-    {
-        let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.custom_api_host.clear();
-        state.custom_api_key.clear();
-        refresh_api_state(&mut state);
-        auto_enable_advanced_mode_if_api_ready(&mut state);
-    }
-    if let Err(e) = crate::ui::state::save_all_settings() {
-        show_alert("重置失败", &format!("写入配置失败: {}", e));
-    } else {
-        show_alert("重置成功", "已恢复默认配置");
-    }
-    crate::ui::build::rerender_main_ui();
-}
-
-fn test_custom_api_connection(host: &str, key: &str) -> Result<(), String> {
-    let host = host.trim();
-    let key = key.trim();
-
-    if host.is_empty() {
-        return Err("API Host 不能为空".to_string());
-    }
-    if key.is_empty() {
-        return Err("API Key 不能为空".to_string());
-    }
-
-    let url = format!("https://{}/geo/v2/city/lookup?location=北京&key={}", host, key);
-    let (status_code, body) = http_get_bytes(&url)?;
-    tracing::info!(
-        "test_custom_api_connection status={}, body_len={}",
-        status_code,
-        body.len()
-    );
-
-    if status_code != 200 {
-        return match status_code {
-            401 => Err("API密钥无效或已过期".to_string()),
-            403 => Err("访问被拒绝，请检查API权限".to_string()),
-            429 => Err("请求过于频繁，请稍后再试".to_string()),
-            _ => Err(format!("API Error: {}", status_code)),
-        };
-    }
-
-    let body = maybe_decompress(body)?;
-    if body.is_empty() {
-        return Err("Empty response".to_string());
-    }
-    let json: serde_json::Value =
-        serde_json::from_slice(&body).map_err(|e| format!("响应解析失败: {}", e))?;
-    if let Some(code) = json.get("code").and_then(|v| v.as_str()) {
-        if code == "200" {
-            Ok(())
-        } else {
-            Err(format!("API Error: {}", code))
-        }
-    } else {
-        Ok(())
-    }
-}
-
 fn search_locations() {
-    let (api, query) = {
+    let query = {
         let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
-        (effective_api_host_key(&state), state.search_query.clone())
+        state.search_query.clone()
     };
 
-    let Some((host, key)) = api else {
-        show_alert("提示", "请先在设置中配置自定义API");
-        return;
-    };
     if query.trim().is_empty() {
         show_alert("提示", "请输入城市名称");
         return;
     }
 
-    let base = format!("https://{}/geo/v2/city/lookup", host);
-    let url = match Url::parse_with_params(&base, &[("location", query), ("key", key)]) {
+    let base = api_url("/api/geo/lookup");
+    let url = match Url::parse_with_params(&base, &[("location", query.trim())]) {
         Ok(u) => u.to_string(),
         Err(e) => {
             show_alert("错误", &format!("URL解析失败: {}", e));
@@ -1214,12 +945,21 @@ fn record_recent_location_from_paste(data: &str) {
         Err(_) => return,
     };
 
-    let fxlink = json
-        .get("fxLink")
+    let location_id = json
+        .get("locationId")
         .and_then(|v| v.as_str())
-        .or_else(|| json.get("location").and_then(|v| v.get("fxLink")).and_then(|v| v.as_str()));
-    let location_id = fxlink
-        .and_then(extract_location_id_from_fxlink)
+        .map(|s| s.to_string())
+        .or_else(|| {
+            let fxlink = json
+                .get("fxLink")
+                .and_then(|v| v.as_str())
+                .or_else(|| {
+                    json.get("location")
+                        .and_then(|v| v.get("fxLink"))
+                        .and_then(|v| v.as_str())
+                });
+            fxlink.and_then(extract_location_id_from_fxlink)
+        })
         .unwrap_or_default();
     if location_id.is_empty() {
         return;
@@ -1255,14 +995,12 @@ fn extract_location_id_from_fxlink(link: &str) -> Option<String> {
 }
 
 pub fn resolve_recent_locations_if_needed() {
-    let (api, recent, selected_id, resolving, advanced_mode, current_tab) = {
+    let (recent, selected_id, resolving, current_tab) = {
         let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
         (
-            effective_api_host_key(&state),
             state.recent_locations.clone(),
             state.selected_location_id.clone(),
             state.recent_resolving,
-            state.advanced_mode,
             state.current_tab,
         )
     };
@@ -1270,12 +1008,9 @@ pub fn resolve_recent_locations_if_needed() {
     if resolving {
         return;
     }
-    if !advanced_mode || current_tab != MainTab::PasteData {
+    if current_tab != MainTab::PasteData {
         return;
     }
-    let Some((host, key)) = api else {
-        return;
-    };
 
     let pending: Vec<LocationOption> = recent
         .into_iter()
@@ -1298,31 +1033,8 @@ pub fn resolve_recent_locations_if_needed() {
     let mut updates: Vec<(String, LocationOption)> = Vec::new();
     for item in pending {
         let query_id = item.id.clone();
-        let base = format!("https://{}/geo/v2/city/lookup", host);
-        let url = match Url::parse_with_params(&base, &[("location", query_id.clone()), ("key", key.clone())]) {
-            Ok(u) => u.to_string(),
-            Err(_) => continue,
-        };
-        if let Ok(json) = http_get_json(&url) {
-            if let Some(first) = json.get("location").and_then(|v| v.as_array()).and_then(|v| v.first()) {
-                let name = first.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let adm1 = first.get("adm1").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let adm2 = first.get("adm2").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let lat = first.get("lat").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let lon = first.get("lon").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let id = first.get("id").and_then(|v| v.as_str()).unwrap_or(&item.id).to_string();
-                updates.push((
-                    query_id,
-                    LocationOption {
-                    id,
-                    name,
-                    adm1,
-                    adm2,
-                    lat,
-                    lon,
-                    },
-                ));
-            }
+        if let Ok(update) = fetch_first_location(&query_id) {
+            updates.push((query_id, update));
         }
     }
 
@@ -1365,6 +1077,52 @@ pub fn resolve_recent_locations_if_needed() {
     let _ = crate::ui::state::save_all_settings();
     crate::ui::build::rerender_main_ui();
 }
+
+fn fetch_first_location(query: &str) -> Result<LocationOption, String> {
+    let base = api_url("/api/geo/lookup");
+    let url = Url::parse_with_params(&base, &[("location", query)])
+        .map_err(|e| format!("URL解析失败: {}", e))?
+        .to_string();
+    let json = http_get_json(&url)?;
+    let first = json
+        .get("location")
+        .and_then(|v| v.as_array())
+        .and_then(|v| v.first())
+        .ok_or_else(|| "未找到匹配地点".to_string())?;
+
+    Ok(LocationOption {
+        id: first
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        name: first
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        adm1: first
+            .get("adm1")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        adm2: first
+            .get("adm2")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        lat: first
+            .get("lat")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        lon: first
+            .get("lon")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+    })
+}
 fn clear_search_after_sync() {
     let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
     state.search_query.clear();
@@ -1379,19 +1137,48 @@ fn http_get_json(url: &str) -> Result<serde_json::Value, String> {
     let (status, body) = http_get_bytes(url)?;
     tracing::info!("http_get_json status={}, body_len={}", status, body.len());
     log_body_preview("http_get_json", &body);
-    if status != 200 {
-        return Err(format!("HTTP {}", status));
-    }
-    let body = maybe_decompress(body)?;
-    if body.is_empty() {
-        return Err("Empty response".to_string());
-    }
-    serde_json::from_slice(&body).map_err(|e| format!("响应解析失败: {}", e))
+    parse_http_json_response(status, body)
+}
+
+fn http_post_json(url: &str, payload: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let body = serde_json::to_vec(payload).map_err(|e| format!("请求序列化失败: {}", e))?;
+    let headers = vec![("Content-Type".to_string(), "application/json".to_string())];
+    let (status, response_body) = http_request_bytes("POST", url, &headers, Some(&body))?;
+    tracing::info!(
+        "http_post_json status={}, body_len={}",
+        status,
+        response_body.len()
+    );
+    log_body_preview("http_post_json", &response_body);
+    parse_http_json_response(status, response_body)
 }
 
 fn http_get_bytes(url: &str) -> Result<(u16, Vec<u8>), String> {
     let headers: Vec<(String, String)> = Vec::new();
     http_request_bytes("GET", url, &headers, None)
+}
+
+fn parse_http_json_response(status: u16, body: Vec<u8>) -> Result<serde_json::Value, String> {
+    let body = maybe_decompress(body)?;
+    if body.is_empty() {
+        return Err("Empty response".to_string());
+    }
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|e| format!("响应解析失败: {}", e))?;
+
+    if status == 200 {
+        return Ok(json);
+    }
+
+    if let Some(message) = json.get("message").and_then(|v| v.as_str()) {
+        return Err(message.to_string());
+    }
+    if let Some(code) = json.get("code").and_then(|v| v.as_str()) {
+        return Err(format!("接口错误: {}", code));
+    }
+
+    Err(format!("HTTP {}", status))
 }
 
 fn http_request_bytes(

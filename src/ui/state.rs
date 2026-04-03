@@ -2,22 +2,17 @@ use std::sync::{OnceLock, RwLock};
 use tracing::{info, warn};
 
 const SETTINGS_FILE: &str = "api_settings.json";
-const EMBEDDED_API_HOST: Option<&str> = option_env!("QWEATHER_API_HOST");
-const EMBEDDED_API_KEY: Option<&str> = option_env!("QWEATHER_API_KEY");
+pub const SERVER_API_BASE: &str = env!("WEATHER_API_HOST");
+
+fn default_sync_hourly_enabled() -> bool {
+    true
+}
 
 pub struct UiState {
     pub root_element_id: Option<String>,
-    pub weather_data: String,
-    pub deeplink_registered: bool, // 跟踪深度链接是否已注册
     pub current_tab: MainTab,
-    pub settings_page: SettingsPage,
-    pub use_custom_api: bool,
-    pub custom_api_host: String,
-    pub custom_api_key: String,
-    pub show_api_host: bool,
-    pub show_api_key: bool,
     pub settings_loaded: bool,
-    pub advanced_mode: bool,
+    pub sync_hourly_enabled: bool,
     pub selected_days: u32,
     pub search_query: String,
     pub search_results: Vec<LocationOption>,
@@ -34,72 +29,14 @@ pub struct UiState {
     pub last_sync_location: String,
 }
 
-fn normalized_embedded(value: Option<&'static str>) -> String {
-    value.unwrap_or("").trim().to_string()
-}
-
-fn has_custom_api(state: &UiState) -> bool {
-    !state.custom_api_host.trim().is_empty() && !state.custom_api_key.trim().is_empty()
-}
-
-fn embedded_api_host_key() -> Option<(String, String)> {
-    let host = normalized_embedded(EMBEDDED_API_HOST);
-    let key = normalized_embedded(EMBEDDED_API_KEY);
-    if host.is_empty() || key.is_empty() {
-        None
-    } else {
-        Some((host, key))
-    }
-}
-
-pub fn effective_api_host_key(state: &UiState) -> Option<(String, String)> {
-    if has_custom_api(state) {
-        return Some((
-            state.custom_api_host.trim().to_string(),
-            state.custom_api_key.trim().to_string(),
-        ));
-    }
-    embedded_api_host_key()
-}
-
-pub fn has_effective_api(state: &UiState) -> bool {
-    effective_api_host_key(state).is_some()
-}
-
-fn scrub_embedded_from_custom_fields(state: &mut UiState) {
-    if let Some((embedded_host, embedded_key)) = embedded_api_host_key() {
-        if state.custom_api_host.trim() == embedded_host && state.custom_api_key.trim() == embedded_key
-        {
-            state.custom_api_host.clear();
-            state.custom_api_key.clear();
-        }
-    }
-}
-
-pub fn refresh_api_state(state: &mut UiState) {
-    scrub_embedded_from_custom_fields(state);
-    state.use_custom_api = has_custom_api(state);
-    if !has_effective_api(state) {
-        state.advanced_mode = false;
-    }
-}
-
-pub fn auto_enable_advanced_mode_if_api_ready(state: &mut UiState) {
-    if has_effective_api(state) {
-        state.advanced_mode = true;
-    }
+pub fn server_api_base() -> &'static str {
+    SERVER_API_BASE
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum MainTab {
     PasteData,
     Settings,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum SettingsPage {
-    Main,
-    Api,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -118,19 +55,11 @@ static UI_STATE: OnceLock<RwLock<UiState>> = OnceLock::new();
 
 pub fn ui_state() -> &'static RwLock<UiState> {
     UI_STATE.get_or_init(|| {
-        let mut state = UiState {
+        let state = UiState {
             root_element_id: None,
-            weather_data: String::new(),
-            deeplink_registered: false,
             current_tab: MainTab::PasteData,
-            settings_page: SettingsPage::Main,
-            use_custom_api: false,
-            custom_api_host: String::new(),
-            custom_api_key: String::new(),
-            show_api_host: false,
-            show_api_key: false,
             settings_loaded: false,
-            advanced_mode: false,
+            sync_hourly_enabled: default_sync_hourly_enabled(),
             selected_days: 7,
             search_query: String::new(),
             search_results: Vec::new(),
@@ -146,19 +75,14 @@ pub fn ui_state() -> &'static RwLock<UiState> {
             last_sync_time_ms: 0,
             last_sync_location: String::new(),
         };
-        refresh_api_state(&mut state);
-        auto_enable_advanced_mode_if_api_ready(&mut state);
         RwLock::new(state)
     })
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct StoredApiSettings {
-    use_custom_api: bool,
-    custom_api_host: String,
-    custom_api_key: String,
-    #[serde(default)]
-    advanced_mode: bool,
+    #[serde(default = "default_sync_hourly_enabled")]
+    sync_hourly_enabled: bool,
     #[serde(default)]
     selected_days: u32,
     #[serde(default)]
@@ -175,6 +99,12 @@ struct StoredApiSettings {
     selected_location_lon: String,
     #[serde(default)]
     recent_locations: Vec<LocationOption>,
+    #[serde(default)]
+    use_custom_api: bool,
+    #[serde(default)]
+    custom_api_host: String,
+    #[serde(default)]
+    custom_api_key: String,
 }
 
 pub fn load_api_settings_once() {
@@ -196,10 +126,7 @@ pub fn load_api_settings_once() {
         Ok(content) => match serde_json::from_str::<StoredApiSettings>(&content) {
             Ok(stored) => {
                 let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
-                state.use_custom_api = stored.use_custom_api;
-                state.custom_api_host = stored.custom_api_host;
-                state.custom_api_key = stored.custom_api_key;
-                state.advanced_mode = stored.advanced_mode;
+                state.sync_hourly_enabled = stored.sync_hourly_enabled;
                 state.selected_days = if stored.selected_days == 0 { 7 } else { stored.selected_days };
                 state.selected_location_id = stored.selected_location_id;
                 state.selected_location_name = stored.selected_location_name;
@@ -219,8 +146,6 @@ pub fn load_api_settings_once() {
                         state.selected_location_lon = first.lon;
                     }
                 }
-                refresh_api_state(&mut state);
-                auto_enable_advanced_mode_if_api_ready(&mut state);
                 info!("loaded api settings from disk");
             }
             Err(e) => {
@@ -233,34 +158,10 @@ pub fn load_api_settings_once() {
     }
 }
 
-pub fn save_api_settings(use_custom_api: bool, host: &str, key: &str) -> Result<(), String> {
-    let stored = StoredApiSettings {
-        use_custom_api,
-        custom_api_host: host.to_string(),
-        custom_api_key: key.to_string(),
-        advanced_mode: false,
-        selected_days: 7,
-        selected_location_id: String::new(),
-        selected_location_name: String::new(),
-        selected_location_adm1: String::new(),
-        selected_location_adm2: String::new(),
-        selected_location_lat: String::new(),
-        selected_location_lon: String::new(),
-        recent_locations: Vec::new(),
-    };
-
-    let content = serde_json::to_string_pretty(&stored).map_err(|e| e.to_string())?;
-    std::fs::write(SETTINGS_FILE, content).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 pub fn save_all_settings() -> Result<(), String> {
     let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
     let stored = StoredApiSettings {
-        use_custom_api: state.use_custom_api,
-        custom_api_host: state.custom_api_host.clone(),
-        custom_api_key: state.custom_api_key.clone(),
-        advanced_mode: state.advanced_mode,
+        sync_hourly_enabled: state.sync_hourly_enabled,
         selected_days: state.selected_days,
         selected_location_id: state.selected_location_id.clone(),
         selected_location_name: state.selected_location_name.clone(),
@@ -269,36 +170,12 @@ pub fn save_all_settings() -> Result<(), String> {
         selected_location_lat: state.selected_location_lat.clone(),
         selected_location_lon: state.selected_location_lon.clone(),
         recent_locations: state.recent_locations.clone(),
+        use_custom_api: false,
+        custom_api_host: String::new(),
+        custom_api_key: String::new(),
     };
 
     let content = serde_json::to_string_pretty(&stored).map_err(|e| e.to_string())?;
     std::fs::write(SETTINGS_FILE, content).map_err(|e| e.to_string())?;
     Ok(())
-}
-
-pub fn clear_api_settings() -> Result<(), String> {
-    match std::fs::remove_file(SETTINGS_FILE) {
-        Ok(_) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-/// 从deeplink设置天气数据
-pub fn set_weather_data_from_deeplink(data: &str) {
-    let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
-    state.weather_data = data.to_string();
-    // 只更新数据，不立即刷新UI，避免锁冲突
-}
-
-/// 设置深度链接注册状态
-pub fn set_deeplink_registered(registered: bool) {
-    let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
-    state.deeplink_registered = registered;
-}
-
-/// 获取深度链接注册状态
-pub fn is_deeplink_registered() -> bool {
-    let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
-    state.deeplink_registered
 }
