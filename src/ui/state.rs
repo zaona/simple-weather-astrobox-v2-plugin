@@ -2,7 +2,7 @@ use std::sync::{OnceLock, RwLock};
 use tracing::{info, warn};
 
 const SETTINGS_FILE: &str = "api_settings.json";
-pub const SERVER_API_BASE: &str = env!("WEATHER_API_HOST");
+const WEATHER_API_HOST: Option<&str> = option_env!("WEATHER_API_HOST");
 
 fn default_sync_hourly_enabled() -> bool {
     true
@@ -29,8 +29,13 @@ pub struct UiState {
     pub last_sync_location: String,
 }
 
-pub fn server_api_base() -> &'static str {
-    SERVER_API_BASE
+pub fn server_api_base() -> Result<&'static str, String> {
+    let host = WEATHER_API_HOST
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "WEATHER_API_HOST 未配置".to_string())?;
+
+    Ok(host)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

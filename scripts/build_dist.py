@@ -252,6 +252,7 @@ def main():
     env = os.environ.copy()
     is_strict_release = args.release and not args.package
     required_release_env_keys = [
+        "WEATHER_API_HOST",
         "SUPABASE_URL",
         "SUPABASE_PUBLISHABLE_KEY",
     ]
@@ -265,7 +266,7 @@ def main():
                 "warning: 如果只是日常开发和调试，请使用 "
                 "`python scripts/build_dist.py --release --package`。\n"
                 "warning: 请参考 .env.example 创建 .env.local，配置 "
-                "SUPABASE_URL、SUPABASE_PUBLISHABLE_KEY"
+                "WEATHER_API_HOST、SUPABASE_URL、SUPABASE_PUBLISHABLE_KEY"
                 "（该文件不会随 Git 提交）。\n"
             )
             sys.exit(1)
@@ -273,7 +274,7 @@ def main():
         sys.stderr.write(
             "warning: 项目根目录未找到 .env.local。"
             "该插件使用 Supabase 上报，请参考 .env.example 创建 .env.local，"
-            "并在其中配置 SUPABASE_URL、SUPABASE_PUBLISHABLE_KEY"
+            "并在其中配置 WEATHER_API_HOST、SUPABASE_URL、SUPABASE_PUBLISHABLE_KEY"
             "（该文件不会随 Git 提交）。"
             "当前将继续构建。\n"
         )

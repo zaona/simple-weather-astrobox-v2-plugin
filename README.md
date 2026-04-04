@@ -39,7 +39,7 @@ update_submodules.bat
 > ```bash
 > cp .env.example .env.local
 > # 然后编辑 .env.local 填入真实值：
-> # SUPABASE_URL、SUPABASE_PUBLISHABLE_KEY
+> # WEATHER_API_HOST、SUPABASE_URL、SUPABASE_PUBLISHABLE_KEY
 > ```
 
 ### 开发命令

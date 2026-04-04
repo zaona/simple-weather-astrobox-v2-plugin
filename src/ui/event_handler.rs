@@ -303,7 +303,15 @@ fn send_weather_data_advanced() {
         lon: location_lon,
     };
 
-    match http_post_json(&api_url("/api/weather/sync"), &payload_json) {
+    let sync_url = match api_url("/api/weather/sync") {
+        Ok(url) => url,
+        Err(e) => {
+            show_alert("错误", &e);
+            return;
+        }
+    };
+
+    match http_post_json(&sync_url, &payload_json) {
         Ok(mut json) => {
             json["location"] = serde_json::Value::String(recent_location.name.clone());
             let payload = json.to_string();
@@ -377,16 +385,16 @@ fn ensure_sync_location_id(
     Ok(location.id)
 }
 
-fn api_url(path: &str) -> String {
-    format!(
+fn api_url(path: &str) -> Result<String, String> {
+    Ok(format!(
         "{}{}",
-        server_api_base().trim_end_matches('/'),
+        server_api_base()?.trim_end_matches('/'),
         if path.starts_with('/') {
             path.to_string()
         } else {
             format!("/{}", path)
         }
-    )
+    ))
 }
 
 fn days_to_api_segment(days: u32) -> &'static str {
@@ -820,7 +828,13 @@ fn search_locations() {
         return;
     }
 
-    let base = api_url("/api/geo/lookup");
+    let base = match api_url("/api/geo/lookup") {
+        Ok(url) => url,
+        Err(e) => {
+            show_alert("错误", &e);
+            return;
+        }
+    };
     let url = match Url::parse_with_params(&base, &[("location", query.trim())]) {
         Ok(u) => u.to_string(),
         Err(e) => {
@@ -1079,7 +1093,7 @@ pub fn resolve_recent_locations_if_needed() {
 }
 
 fn fetch_first_location(query: &str) -> Result<LocationOption, String> {
-    let base = api_url("/api/geo/lookup");
+    let base = api_url("/api/geo/lookup")?;
     let url = Url::parse_with_params(&base, &[("location", query)])
         .map_err(|e| format!("URL解析失败: {}", e))?
         .to_string();
