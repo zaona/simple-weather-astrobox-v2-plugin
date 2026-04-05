@@ -34,12 +34,12 @@ update_submodules.bat
 
 ### 构建插件
 
-> 若需启用 Supabase 上报，release 强制要求使用本地配置文件（不要提交到仓库）：
+> 若需启用 API 上报，release 强制要求使用本地配置文件（不要提交到仓库）：
 >
 > ```bash
 > cp .env.example .env.local
 > # 然后编辑 .env.local 填入真实值：
-> # WEATHER_API_HOST、SUPABASE_URL、SUPABASE_PUBLISHABLE_KEY
+> # WEATHER_API_HOST、WEATHER_API_CLIENT_TYPE、WEATHER_API_KEY
 > ```
 
 ### 开发命令

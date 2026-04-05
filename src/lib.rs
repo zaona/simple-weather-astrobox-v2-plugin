@@ -1,5 +1,5 @@
-use wit_bindgen::FutureReader;
 use serde_json;
+use wit_bindgen::FutureReader;
 
 use crate::exports::astrobox::psys_plugin::{event, lifecycle};
 
@@ -19,7 +19,11 @@ impl event::Guest for MyPlugin {
     fn on_event(event_type: event::EventType, event_payload: _rt::String) -> FutureReader<String> {
         let (writer, reader) = wit_future::new::<String>(|| "".to_string());
 
-        tracing::info!("DEBUG - event_type: {:?}, event_payload: {}", event_type, event_payload);
+        tracing::info!(
+            "DEBUG - event_type: {:?}, event_payload: {}",
+            event_type,
+            event_payload
+        );
 
         match event_type {
             event::EventType::InterconnectMessage => {
@@ -118,7 +122,6 @@ impl lifecycle::Guest for MyPlugin {
             .await;
             tracing::info!("register card result: {:?}", result);
         });
-
     }
 }
 

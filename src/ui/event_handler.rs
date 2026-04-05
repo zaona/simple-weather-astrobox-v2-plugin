@@ -1,18 +1,14 @@
+use super::state::*;
 use crate::astrobox::psys_host;
+use crate::astrobox::psys_host::dialog;
 use crate::astrobox::psys_host::interconnect;
 use crate::astrobox::psys_host::register;
 use crate::astrobox::psys_host::thirdpartyapp;
 use crate::astrobox::psys_host::timer;
-use crate::astrobox::psys_host::dialog;
-use url::Url;
-use std::io::Read;
-use flate2::read::GzDecoder;
-use waki::bindings::wasi::http::{outgoing_handler, types as http_types};
-use waki::bindings::wasi::io::streams::StreamError;
-use super::state::*;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use url::Url;
 
 pub const SEND_BUTTON_EVENT: &str = "send_button";
 pub const TAB_PASTE_EVENT: &str = "tab_paste";
@@ -28,13 +24,11 @@ pub const SELECT_LOCATION_PREFIX: &str = "select_location:";
 pub const SELECT_RECENT_PREFIX: &str = "select_recent:";
 pub const SELECT_DAYS_PREFIX: &str = "select_days:";
 
-
 static LAST_READY_TS_MS: AtomicU64 = AtomicU64::new(0);
 static HANDSHAKE_RUNNING: AtomicBool = AtomicBool::new(false);
 static PENDING_TIMER_ID: AtomicU64 = AtomicU64::new(0);
 const PENDING_SEND_TIMEOUT_MS: u64 = 1200;
-const WEATHER_SYNC_SOURCE: &str = "ab_plugin_v2";
-const WEATHER_SYNC_HOURLY_RANGE: &str = "72h";
+const WEATHER_SYNC_HOURLY_RANGE: &str = "168h";
 
 struct PendingSend {
     device_addr: String,
@@ -78,7 +72,11 @@ pub fn handle_timer_payload(payload: &str) {
     }
 }
 
-pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::event::Event, event_id: &str, event_payload: &str) {
+pub fn ui_event_processor(
+    event_type: crate::exports::astrobox::psys_plugin::event::Event,
+    event_id: &str,
+    event_payload: &str,
+) {
     if !is_high_frequency_input_event(event_id) {
         let _ = event_payload;
         tracing::info!("UI Event: type={:?}, id={}", event_type, event_id);
@@ -91,7 +89,9 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
         }
         TAB_PASTE_EVENT => {
             let should_rerender = {
-                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut state = ui_state()
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 if state.current_tab != MainTab::PasteData {
                     state.current_tab = MainTab::PasteData;
                     true
@@ -106,7 +106,9 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
         }
         TAB_SETTINGS_EVENT => {
             let should_rerender = {
-                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut state = ui_state()
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 if state.current_tab != MainTab::Settings {
                     state.current_tab = MainTab::Settings;
                     true
@@ -129,7 +131,9 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
         }
         HOURLY_SYNC_TOGGLE_EVENT => {
             let should_rerender = {
-                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut state = ui_state()
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 state.sync_hourly_enabled = !state.sync_hourly_enabled;
                 true
             };
@@ -140,13 +144,17 @@ pub fn ui_event_processor(event_type: crate::exports::astrobox::psys_plugin::eve
         }
         SEARCH_INPUT_CHANGE_EVENT => {
             let parsed_value = parse_event_value(event_payload);
-            let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut state = ui_state()
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             state.search_query = parsed_value;
         }
         SEARCH_INPUT_SUBMIT_EVENT => {
             let parsed_value = parse_event_value(event_payload);
             {
-                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut state = ui_state()
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 state.search_query = parsed_value;
             }
             if payload_has_enter(event_payload) {
@@ -194,8 +202,7 @@ fn payload_has_enter(payload: &str) -> bool {
 fn is_high_frequency_input_event(event_id: &str) -> bool {
     matches!(
         event_id,
-        SEARCH_INPUT_CHANGE_EVENT
-            | SEARCH_INPUT_SUBMIT_EVENT
+        SEARCH_INPUT_CHANGE_EVENT | SEARCH_INPUT_SUBMIT_EVENT
     )
 }
 
@@ -258,7 +265,9 @@ fn send_weather_data_advanced() {
         sync_hourly_enabled,
         selected_from_search,
     ) = {
-        let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let state = ui_state()
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         (
             state.selected_location_id.clone(),
             state.selected_location_name.clone(),
@@ -272,17 +281,16 @@ fn send_weather_data_advanced() {
         )
     };
 
-    let sync_location_id =
-        match ensure_sync_location_id(&location_id, &location_lat, &location_lon) {
-            Ok(value) => value,
-            Err(message) => {
-                show_alert("提示", &message);
-                return;
-            }
-        };
+    let sync_location_id = match ensure_sync_location_id(&location_id, &location_lat, &location_lon)
+    {
+        Ok(value) => value,
+        Err(message) => {
+            show_alert("提示", &message);
+            return;
+        }
+    };
 
     let payload_json = serde_json::json!({
-        "source": WEATHER_SYNC_SOURCE,
         "locationId": sync_location_id,
         "modules": {
             "daily": days_to_api_segment(days),
@@ -350,7 +358,9 @@ fn mark_sync_started(payload: &str, location: &LocationOption) {
         extract_location_from_payload(payload).unwrap_or_default()
     };
 
-    let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut state = ui_state()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     state.last_sync_time_ms = now_ms();
     if !location_name.is_empty() {
         state.last_sync_location = location_name;
@@ -404,7 +414,7 @@ fn days_to_api_segment(days: u32) -> &'static str {
         10 => "10d",
         15 => "15d",
         30 => "30d",
-        _ => "3d",
+        _ => "7d",
     }
 }
 
@@ -417,15 +427,16 @@ async fn send_via_interconnect(data: &str) -> Result<SendOutcome, String> {
     tracing::info!("send_via_interconnect start");
 
     let devices = psys_host::device::get_connected_device_list().await;
-    tracing::info!("get_connected_device_list returned {} devices", devices.len());
+    tracing::info!(
+        "get_connected_device_list returned {} devices",
+        devices.len()
+    );
 
     if devices.is_empty() {
         return Err("没有连接的设备".to_string());
     }
 
-    let first_device = devices.first()
-        .ok_or("没有连接的设备")?
-        .clone();
+    let first_device = devices.first().ok_or("没有连接的设备")?.clone();
     let device_addr = first_device.addr.clone();
     let device_name = first_device.name.clone();
 
@@ -446,7 +457,10 @@ async fn send_via_interconnect(data: &str) -> Result<SendOutcome, String> {
         }
     }
 
-    tracing::info!("ensuring interconnect is registered for device: {}", device_addr);
+    tracing::info!(
+        "ensuring interconnect is registered for device: {}",
+        device_addr
+    );
     let reg_result = register::register_interconnect_recv(&device_addr, pkg_name).await;
     tracing::info!("register_interconnect_recv result: {:?}", reg_result);
     if reg_result.is_err() {
@@ -466,17 +480,19 @@ async fn send_via_interconnect(data: &str) -> Result<SendOutcome, String> {
             .await
             .map_err(|e| format!("{:?}", e))?;
         tracing::info!("send_qaic_message completed");
-        let report_result = super::supabase::report_device_to_supabase(&device_addr, &device_name);
+        let report_result = super::api_client::report_device(&device_addr, &device_name);
         update_last_sync_from_data(&data_str);
         if let Err(e) = report_result {
-            tracing::warn!("send success but supabase report failed: {}", e);
+            tracing::warn!("send success but api report failed: {}", e);
         }
         return Ok(SendOutcome::Sent);
     }
 
     // Queue the payload and wait for ready via interconnect message callback.
     {
-        let mut slot = pending_send().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut slot = pending_send()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *slot = Some(PendingSend {
             device_addr: device_addr.clone(),
             device_name: device_name.clone(),
@@ -502,8 +518,14 @@ fn now_ms() -> u64 {
 
 fn extract_interconnect_fields(payload: &str) -> (Option<String>, Option<String>, Option<String>) {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(payload) {
-        let addr = json.get("addr").and_then(|v| v.as_str()).map(|s| s.to_string());
-        let pkg = json.get("pkgName").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let addr = json
+            .get("addr")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let pkg = json
+            .get("pkgName")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         let payload_text = json
             .get("payloadText")
             .and_then(|v| v.as_str())
@@ -515,7 +537,9 @@ fn extract_interconnect_fields(payload: &str) -> (Option<String>, Option<String>
 
 fn update_last_sync_from_data(data: &str) {
     let location_from_data = extract_location_from_payload(data);
-    let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut state = ui_state()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     state.last_sync_time_ms = now_ms();
 
     if let Some(loc) = location_from_data {
@@ -536,13 +560,17 @@ fn update_last_sync_from_data(data: &str) {
 
 fn extract_location_from_payload(data: &str) -> Option<String> {
     let json = serde_json::from_str::<serde_json::Value>(data).ok()?;
-    json.get("location").and_then(|v| v.as_str()).map(|s| s.to_string())
+    json.get("location")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 fn try_send_pending(addr: String, pkg: String) {
     tracing::info!("try_send_pending called: addr={}, pkg={}", addr, pkg);
     let pending = {
-        let mut slot = pending_send().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut slot = pending_send()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         match slot.as_ref() {
             Some(item) => {
                 tracing::info!(
@@ -577,18 +605,15 @@ fn try_send_pending(addr: String, pkg: String) {
     );
     wit_bindgen::block_on(async move {
         clear_pending_timeout().await;
-        let send_result = interconnect::send_qaic_message(
-            &pending.device_addr,
-            &pending.pkg_name,
-            &pending.data,
-        )
-        .await;
+        let send_result =
+            interconnect::send_qaic_message(&pending.device_addr, &pending.pkg_name, &pending.data)
+                .await;
 
         match send_result {
             Ok(_) => {
                 tracing::info!("pending send completed");
                 let report_result =
-                    super::supabase::report_device_to_supabase(&pending.device_addr, &pending.device_name);
+                    super::api_client::report_device(&pending.device_addr, &pending.device_name);
                 record_recent_location_from_paste(&pending.data);
                 HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
                 update_last_sync_from_data(&pending.data);
@@ -596,8 +621,10 @@ fn try_send_pending(addr: String, pkg: String) {
                     show_alert("成功", "发送成功");
                 } else {
                     tracing::warn!(
-                        "send success but supabase report failed: {}",
-                        report_result.err().unwrap_or_else(|| "未知错误".to_string())
+                        "send success but api report failed: {}",
+                        report_result
+                            .err()
+                            .unwrap_or_else(|| "未知错误".to_string())
                     );
                     show_alert("成功", "发送成功");
                 }
@@ -613,7 +640,9 @@ fn try_send_pending(addr: String, pkg: String) {
 
 fn try_send_pending_any() {
     let pending = {
-        let mut slot = pending_send().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut slot = pending_send()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         slot.take()
     };
 
@@ -631,18 +660,15 @@ fn try_send_pending_any() {
 
     wit_bindgen::block_on(async move {
         clear_pending_timeout().await;
-        let send_result = interconnect::send_qaic_message(
-            &pending.device_addr,
-            &pending.pkg_name,
-            &pending.data,
-        )
-        .await;
+        let send_result =
+            interconnect::send_qaic_message(&pending.device_addr, &pending.pkg_name, &pending.data)
+                .await;
 
         match send_result {
             Ok(_) => {
                 tracing::info!("pending send completed (timeout)");
                 let report_result =
-                    super::supabase::report_device_to_supabase(&pending.device_addr, &pending.device_name);
+                    super::api_client::report_device(&pending.device_addr, &pending.device_name);
                 record_recent_location_from_paste(&pending.data);
                 HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
                 update_last_sync_from_data(&pending.data);
@@ -650,8 +676,10 @@ fn try_send_pending_any() {
                     show_alert("成功", "发送成功");
                 } else {
                     tracing::warn!(
-                        "send success but supabase report failed: {}",
-                        report_result.err().unwrap_or_else(|| "未知错误".to_string())
+                        "send success but api report failed: {}",
+                        report_result
+                            .err()
+                            .unwrap_or_else(|| "未知错误".to_string())
                     );
                     show_alert("成功", "发送成功");
                 }
@@ -696,7 +724,8 @@ fn start_handshake_loop(device_addr: String, pkg_name: String) {
                 return;
             }
             tracing::info!("handshake attempt {}", attempt + 1);
-            let start_result = interconnect::send_qaic_message(&device_addr, &pkg_name, "start").await;
+            let start_result =
+                interconnect::send_qaic_message(&device_addr, &pkg_name, "start").await;
             tracing::info!("send start result: {:?}", start_result);
 
             for _ in 0..12 {
@@ -708,7 +737,8 @@ fn start_handshake_loop(device_addr: String, pkg_name: String) {
                 }
                 last_seen = current;
                 std::thread::sleep(Duration::from_millis(50));
-                if now_ms().saturating_sub(start_ms) >= PENDING_SEND_TIMEOUT_MS && pending_exists() {
+                if now_ms().saturating_sub(start_ms) >= PENDING_SEND_TIMEOUT_MS && pending_exists()
+                {
                     tracing::info!("pending timeout reached, sending without ready");
                     HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
                     try_send_pending_any();
@@ -723,7 +753,9 @@ fn start_handshake_loop(device_addr: String, pkg_name: String) {
 }
 
 fn pending_exists() -> bool {
-    let slot = pending_send().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let slot = pending_send()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     slot.is_some()
 }
 
@@ -748,8 +780,16 @@ async fn check_quick_app_installed(device_addr: &str, pkg_name: &str) -> Result<
     }
 }
 
-async fn ensure_quick_app_launched(device_addr: &str, pkg_name: &str, page_name: &str) -> Result<(), String> {
-    tracing::info!("ensure_quick_app_launched: pkg={}, page={}", pkg_name, page_name);
+async fn ensure_quick_app_launched(
+    device_addr: &str,
+    pkg_name: &str,
+    page_name: &str,
+) -> Result<(), String> {
+    tracing::info!(
+        "ensure_quick_app_launched: pkg={}, page={}",
+        pkg_name,
+        page_name
+    );
 
     let app_list = thirdpartyapp::get_thirdparty_app_list(device_addr)
         .await
@@ -812,14 +852,17 @@ fn show_alert(title: &str, message: &str) {
                     content: "确定".to_string(),
                 }],
             },
-        ).await;
+        )
+        .await;
         tracing::info!("alert dialog closed");
     });
 }
 
 fn search_locations() {
     let query = {
-        let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let state = ui_state()
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.search_query.clone()
     };
 
@@ -848,12 +891,36 @@ fn search_locations() {
             let mut results: Vec<LocationOption> = Vec::new();
             if let Some(list) = json.get("location").and_then(|v| v.as_array()) {
                 for item in list {
-                    let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let adm1 = item.get("adm1").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let adm2 = item.get("adm2").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let lat = item.get("lat").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let lon = item.get("lon").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let id = item
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let name = item
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let adm1 = item
+                        .get("adm1")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let adm2 = item
+                        .get("adm2")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let lat = item
+                        .get("lat")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let lon = item
+                        .get("lon")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     if !id.is_empty() || (!lat.is_empty() && !lon.is_empty()) {
                         let normalized_id = if id.is_empty() {
                             format!("{},{}", lon, lat)
@@ -872,7 +939,9 @@ fn search_locations() {
                 }
             }
             {
-                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut state = ui_state()
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 state.search_results = results;
             }
             crate::ui::build::rerender_main_ui();
@@ -884,7 +953,9 @@ fn search_locations() {
 }
 
 fn select_location(idx: usize) {
-    let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut state = ui_state()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let picked = state.search_results.get(idx).cloned();
     if let Some(item) = &picked {
         state.selected_location_id = item.id.clone();
@@ -903,7 +974,9 @@ fn select_location(idx: usize) {
 
 fn select_recent_location(idx: usize) {
     let _picked = {
-        let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = ui_state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let picked = state.recent_locations.get(idx).cloned();
         if let Some(item) = &picked {
             state.selected_location_id = item.id.clone();
@@ -925,7 +998,9 @@ fn select_days(day: u32) {
     if day == 0 {
         return;
     }
-    let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut state = ui_state()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     state.selected_days = day;
     drop(state);
     let _ = crate::ui::state::save_all_settings();
@@ -934,7 +1009,9 @@ fn select_days(day: u32) {
 
 fn record_recent_location(location: LocationOption) {
     const MAX_RECENT: usize = 5;
-    let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut state = ui_state()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     state.selected_location_id = location.id.clone();
     state.selected_location_name = location.name.clone();
     state.selected_location_adm1 = location.adm1.clone();
@@ -964,14 +1041,11 @@ fn record_recent_location_from_paste(data: &str) {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .or_else(|| {
-            let fxlink = json
-                .get("fxLink")
-                .and_then(|v| v.as_str())
-                .or_else(|| {
-                    json.get("location")
-                        .and_then(|v| v.get("fxLink"))
-                        .and_then(|v| v.as_str())
-                });
+            let fxlink = json.get("fxLink").and_then(|v| v.as_str()).or_else(|| {
+                json.get("location")
+                    .and_then(|v| v.get("fxLink"))
+                    .and_then(|v| v.as_str())
+            });
             fxlink.and_then(extract_location_id_from_fxlink)
         })
         .unwrap_or_default();
@@ -982,7 +1056,11 @@ fn record_recent_location_from_paste(data: &str) {
     let location_name = json
         .get("location")
         .and_then(|v| v.as_str())
-        .or_else(|| json.get("location").and_then(|v| v.get("name")).and_then(|v| v.as_str()))
+        .or_else(|| {
+            json.get("location")
+                .and_then(|v| v.get("name"))
+                .and_then(|v| v.as_str())
+        })
         .unwrap_or("")
         .to_string();
 
@@ -1010,7 +1088,9 @@ fn extract_location_id_from_fxlink(link: &str) -> Option<String> {
 
 pub fn resolve_recent_locations_if_needed() {
     let (recent, selected_id, resolving, current_tab) = {
-        let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let state = ui_state()
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         (
             state.recent_locations.clone(),
             state.selected_location_id.clone(),
@@ -1040,7 +1120,9 @@ pub fn resolve_recent_locations_if_needed() {
     }
 
     {
-        let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = ui_state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.recent_resolving = true;
     }
 
@@ -1053,13 +1135,17 @@ pub fn resolve_recent_locations_if_needed() {
     }
 
     if updates.is_empty() {
-        let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = ui_state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.recent_resolving = false;
         return;
     }
 
     {
-        let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = ui_state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         for (query_id, update) in &updates {
             if let Some(item) = state
                 .recent_locations
@@ -1138,7 +1224,9 @@ fn fetch_first_location(query: &str) -> Result<LocationOption, String> {
     })
 }
 fn clear_search_after_sync() {
-    let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut state = ui_state()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     state.search_query.clear();
     state.search_results.clear();
     state.selected_from_search = false;
@@ -1148,175 +1236,9 @@ fn clear_search_after_sync() {
 }
 
 fn http_get_json(url: &str) -> Result<serde_json::Value, String> {
-    let (status, body) = http_get_bytes(url)?;
-    tracing::info!("http_get_json status={}, body_len={}", status, body.len());
-    log_body_preview("http_get_json", &body);
-    parse_http_json_response(status, body)
+    super::api_client::get_json(url)
 }
 
 fn http_post_json(url: &str, payload: &serde_json::Value) -> Result<serde_json::Value, String> {
-    let body = serde_json::to_vec(payload).map_err(|e| format!("请求序列化失败: {}", e))?;
-    let headers = vec![("Content-Type".to_string(), "application/json".to_string())];
-    let (status, response_body) = http_request_bytes("POST", url, &headers, Some(&body))?;
-    tracing::info!(
-        "http_post_json status={}, body_len={}",
-        status,
-        response_body.len()
-    );
-    log_body_preview("http_post_json", &response_body);
-    parse_http_json_response(status, response_body)
-}
-
-fn http_get_bytes(url: &str) -> Result<(u16, Vec<u8>), String> {
-    let headers: Vec<(String, String)> = Vec::new();
-    http_request_bytes("GET", url, &headers, None)
-}
-
-fn parse_http_json_response(status: u16, body: Vec<u8>) -> Result<serde_json::Value, String> {
-    let body = maybe_decompress(body)?;
-    if body.is_empty() {
-        return Err("Empty response".to_string());
-    }
-
-    let json: serde_json::Value =
-        serde_json::from_slice(&body).map_err(|e| format!("响应解析失败: {}", e))?;
-
-    if status == 200 {
-        return Ok(json);
-    }
-
-    if let Some(message) = json.get("message").and_then(|v| v.as_str()) {
-        return Err(message.to_string());
-    }
-    if let Some(code) = json.get("code").and_then(|v| v.as_str()) {
-        return Err(format!("接口错误: {}", code));
-    }
-
-    Err(format!("HTTP {}", status))
-}
-
-fn http_request_bytes(
-    method: &str,
-    url: &str,
-    headers: &[(String, String)],
-    body: Option<&[u8]>,
-) -> Result<(u16, Vec<u8>), String> {
-    tracing::info!("http_request_bytes method={}", method);
-    let url = Url::parse(url).map_err(|e| e.to_string())?;
-    let header_entries: Vec<(String, Vec<u8>)> = headers
-        .iter()
-        .map(|(k, v)| (k.clone(), v.as_bytes().to_vec()))
-        .collect();
-    let headers = http_types::Headers::from_list(&header_entries)
-        .map_err(|e| format!("{:?}", e))?;
-    let req = http_types::OutgoingRequest::new(headers);
-
-    let http_method = match method {
-        "POST" => http_types::Method::Post,
-        "GET" => http_types::Method::Get,
-        _ => return Err(format!("unsupported method: {}", method)),
-    };
-
-    req.set_method(&http_method)
-        .map_err(|()| "failed to set method".to_string())?;
-
-    let scheme = match url.scheme() {
-        "https" => http_types::Scheme::Https,
-        _ => http_types::Scheme::Http,
-    };
-    req.set_scheme(Some(&scheme))
-        .map_err(|()| "failed to set scheme".to_string())?;
-
-    let authority = url.authority();
-    req.set_authority(Some(authority))
-        .map_err(|()| "failed to set authority".to_string())?;
-
-    let path = match url.query() {
-        Some(q) => format!("{}?{}", url.path(), q),
-        None => url.path().to_string(),
-    };
-    req.set_path_with_query(Some(&path))
-        .map_err(|()| "failed to set path".to_string())?;
-
-    let options = http_types::RequestOptions::new();
-    let outgoing_body = req
-        .body()
-        .map_err(|_| "outgoing request write failed".to_string())?;
-    let maybe_stream = if let Some(body) = body {
-        let stream = outgoing_body
-            .write()
-            .map_err(|_| "open body writer failed".to_string())?;
-        stream
-            .blocking_write_and_flush(body)
-            .map_err(|e| format!("write body failed: {:?}", e))?;
-        drop(stream);
-        None
-    } else {
-        None
-    };
-    http_types::OutgoingBody::finish(outgoing_body, maybe_stream)
-        .map_err(|_| "finish body failed".to_string())?;
-
-    let future_response = outgoing_handler::handle(req, Some(options))
-        .map_err(|e| format!("{:?}", e))?;
-    let incoming_response = match future_response.get() {
-        Some(result) => result.map_err(|()| "response already taken".to_string())?,
-        None => {
-            let pollable = future_response.subscribe();
-            pollable.block();
-            future_response
-                .get()
-                .ok_or_else(|| "response not available".to_string())?
-                .map_err(|()| "response already taken".to_string())?
-        }
-    }
-    .map_err(|e| format!("{:?}", e))?;
-
-    let status = incoming_response.status();
-    tracing::info!("http_get_bytes status={}", status);
-    let incoming_body = incoming_response
-        .consume()
-        .map_err(|_| "missing body".to_string())?;
-    let input_stream = incoming_body
-        .stream()
-        .map_err(|_| "failed to open body stream".to_string())?;
-
-    let mut body = Vec::new();
-    loop {
-        match input_stream.blocking_read(1024 * 64) {
-            Ok(chunk) => {
-                if chunk.is_empty() {
-                    break;
-                }
-                body.extend_from_slice(&chunk);
-            }
-            Err(StreamError::Closed) => break,
-            Err(e) => return Err(format!("read body failed: {:?}", e)),
-        }
-    }
-
-    Ok((status, body))
-}
-
-fn log_body_preview(tag: &str, body: &[u8]) {
-    if body.is_empty() {
-        tracing::info!("{} body_preview: <empty>", tag);
-        return;
-    }
-    let preview_len = body.len().min(400);
-    let preview = String::from_utf8_lossy(&body[..preview_len]);
-    tracing::info!("{} body_preview_utf8: {}", tag, preview);
-}
-
-fn maybe_decompress(body: Vec<u8>) -> Result<Vec<u8>, String> {
-    if body.len() >= 2 && body[0] == 0x1f && body[1] == 0x8b {
-        tracing::info!("detected gzip body, decompressing...");
-        let mut decoder = GzDecoder::new(&body[..]);
-        let mut out = Vec::new();
-        decoder
-            .read_to_end(&mut out)
-            .map_err(|e| format!("gzip decompress failed: {}", e))?;
-        return Ok(out);
-    }
-    Ok(body)
+    super::api_client::post_json(url, payload)
 }

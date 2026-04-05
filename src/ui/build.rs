@@ -1,13 +1,15 @@
+use super::SYNC_CARD_ID;
+use super::event_handler::*;
+use super::state::*;
 use crate::astrobox::psys_host;
 use crate::astrobox::psys_host::ui;
-use super::state::*;
-use super::event_handler::*;
 use std::time::{SystemTime, UNIX_EPOCH};
-use super::SYNC_CARD_ID;
 
 pub fn render_main_ui(element_id: &str) {
     {
-        let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = ui_state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.root_element_id = Some(element_id.to_string());
     }
 
@@ -35,9 +37,7 @@ pub fn build_main_ui() -> ui::Element {
         MainTab::Settings => build_settings_tab(&state),
     };
 
-    container
-        .child(tabs)
-        .child(content)
+    container.child(tabs).child(content)
 }
 
 pub fn render_sync_card(card_id: &str) {
@@ -163,8 +163,7 @@ fn build_settings_main(_state: &UiState) -> ui::Element {
         None,
     );
 
-    root
-        .child(afd_card.margin_bottom(10))
+    root.child(afd_card.margin_bottom(10))
         .child(help_card.margin_bottom(10))
         .child(qq_card.margin_bottom(18))
         .child(build_title)
@@ -197,9 +196,7 @@ fn build_sync_card_text() -> String {
     let expired_mark = if expired { " (已过期)" } else { "" };
     format!(
         "上次同步\n地点: {}\n时间: {}{}",
-        location,
-        time_text,
-        expired_mark
+        location, time_text, expired_mark
     )
 }
 
@@ -280,7 +277,11 @@ fn days_in_month(y: i32, m: i32) -> i32 {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
         2 => {
-            if is_leap_year(y) { 29 } else { 28 }
+            if is_leap_year(y) {
+                29
+            } else {
+                28
+            }
         }
         _ => 30,
     }
@@ -349,7 +350,7 @@ fn build_advanced_send_tab(state: &UiState) -> ui::Element {
     let hourly_card = build_settings_card(
         hourly_sync_svg(),
         "同步逐小时天气数据",
-        Some("开启后同步最近 3天逐小时天气"),
+        Some("开启后同步最近 7天逐小时天气"),
         Some(build_switch(
             state.sync_hourly_enabled,
             HOURLY_SYNC_TOGGLE_EVENT,
@@ -359,18 +360,18 @@ fn build_advanced_send_tab(state: &UiState) -> ui::Element {
     .margin_top(12)
     .margin_bottom(4);
 
-    let send_button = build_icon_text_button_full("同步数据", send_tab_svg_blue(), SEND_BUTTON_EVENT)
-        .bg("#0090FF26")
-        .text_color("#0090FF")
-        .margin_top(16);
+    let send_button =
+        build_icon_text_button_full("同步数据", send_tab_svg_blue(), SEND_BUTTON_EVENT)
+            .bg("#0090FF26")
+            .text_color("#0090FF")
+            .margin_top(16);
 
     let root = ui::Element::new(ui::ElementType::Div, None)
         .flex()
         .flex_direction(ui::FlexDirection::Column)
         .width_full();
 
-    root
-        .child(search_label)
+    root.child(search_label)
         .child(search_row)
         .child(recent_container)
         .child(results_container)
@@ -514,8 +515,7 @@ fn build_days_row(state: &UiState) -> ui::Element {
 
     for (i, day) in options.iter().enumerate() {
         let is_active = *day == state.selected_days;
-        let text = ui::Element::new(ui::ElementType::Span, Some(&format!("{}天", day)))
-            .size(14);
+        let text = ui::Element::new(ui::ElementType::Span, Some(&format!("{}天", day))).size(14);
 
         let btn = ui::Element::new(ui::ElementType::Button, None)
             .without_default_styles()
@@ -540,7 +540,9 @@ fn build_days_row(state: &UiState) -> ui::Element {
 
 pub fn rerender_main_ui() {
     let element_id = {
-        let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let state = ui_state()
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.root_element_id.clone()
     };
 
@@ -598,8 +600,7 @@ fn build_settings_card(
         .flex_direction(ui::FlexDirection::Column)
         .width_full();
 
-    let title_el = ui::Element::new(ui::ElementType::P, Some(title))
-        .size(15);
+    let title_el = ui::Element::new(ui::ElementType::P, Some(title)).size(15);
     text_col = text_col.child(title_el);
 
     if let Some(desc_text) = desc {
@@ -693,8 +694,7 @@ fn build_tab_button(label: &str, icon_svg: String, is_active: bool, event_id: &s
         .width(22)
         .height(22);
 
-    let text = ui::Element::new(ui::ElementType::Span, Some(label))
-        .size(14);
+    let text = ui::Element::new(ui::ElementType::Span, Some(label)).size(14);
 
     ui::Element::new(ui::ElementType::Button, None)
         .without_default_styles()
@@ -726,8 +726,7 @@ fn build_icon_text_button_full(label: &str, icon_svg: String, event_id: &str) ->
         .width(24)
         .height(24);
 
-    let text = ui::Element::new(ui::ElementType::Span, Some(label))
-        .size(14);
+    let text = ui::Element::new(ui::ElementType::Span, Some(label)).size(14);
 
     ui::Element::new(ui::ElementType::Button, None)
         .without_default_styles()
@@ -763,13 +762,17 @@ fn build_search_inline_button(event_id: &str) -> ui::Element {
         .child(icon)
 }
 
-fn build_location_chip(label: &str, icon_svg: String, event_id: &str, selected: bool) -> ui::Element {
+fn build_location_chip(
+    label: &str,
+    icon_svg: String,
+    event_id: &str,
+    selected: bool,
+) -> ui::Element {
     let icon = ui::Element::new(ui::ElementType::Svg, Some(&icon_svg))
         .width(16)
         .height(16);
 
-    let text = ui::Element::new(ui::ElementType::Span, Some(label))
-        .size(14);
+    let text = ui::Element::new(ui::ElementType::Span, Some(label)).size(14);
 
     ui::Element::new(ui::ElementType::Button, None)
         .without_default_styles()
@@ -798,7 +801,9 @@ fn build_location_label(item: &LocationOption) -> String {
     if item.adm1.is_empty() && item.adm2.is_empty() {
         item.name.clone()
     } else {
-        format!("{} · {} {}", item.name, item.adm1, item.adm2).trim().to_string()
+        format!("{} · {} {}", item.name, item.adm1, item.adm2)
+            .trim()
+            .to_string()
     }
 }
 

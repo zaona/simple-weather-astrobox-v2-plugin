@@ -3,6 +3,8 @@ use tracing::{info, warn};
 
 const SETTINGS_FILE: &str = "api_settings.json";
 const WEATHER_API_HOST: Option<&str> = option_env!("WEATHER_API_HOST");
+const WEATHER_API_CLIENT_TYPE: Option<&str> = option_env!("WEATHER_API_CLIENT_TYPE");
+const WEATHER_API_KEY: Option<&str> = option_env!("WEATHER_API_KEY");
 
 fn default_sync_hourly_enabled() -> bool {
     true
@@ -36,6 +38,24 @@ pub fn server_api_base() -> Result<&'static str, String> {
         .ok_or_else(|| "WEATHER_API_HOST 未配置".to_string())?;
 
     Ok(host)
+}
+
+pub fn server_api_client_type() -> Result<&'static str, String> {
+    let client_type = WEATHER_API_CLIENT_TYPE
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "WEATHER_API_CLIENT_TYPE 未配置".to_string())?;
+
+    Ok(client_type)
+}
+
+pub fn server_api_key() -> Result<&'static str, String> {
+    let api_key = WEATHER_API_KEY
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "WEATHER_API_KEY 未配置".to_string())?;
+
+    Ok(api_key)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -114,7 +134,9 @@ struct StoredApiSettings {
 
 pub fn load_api_settings_once() {
     let should_load = {
-        let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = ui_state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if state.settings_loaded {
             false
         } else {
@@ -130,9 +152,15 @@ pub fn load_api_settings_once() {
     match std::fs::read_to_string(SETTINGS_FILE) {
         Ok(content) => match serde_json::from_str::<StoredApiSettings>(&content) {
             Ok(stored) => {
-                let mut state = ui_state().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut state = ui_state()
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 state.sync_hourly_enabled = stored.sync_hourly_enabled;
-                state.selected_days = if stored.selected_days == 0 { 7 } else { stored.selected_days };
+                state.selected_days = if stored.selected_days == 0 {
+                    7
+                } else {
+                    stored.selected_days
+                };
                 state.selected_location_id = stored.selected_location_id;
                 state.selected_location_name = stored.selected_location_name;
                 state.selected_location_adm1 = stored.selected_location_adm1;
@@ -164,7 +192,9 @@ pub fn load_api_settings_once() {
 }
 
 pub fn save_all_settings() -> Result<(), String> {
-    let state = ui_state().read().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let state = ui_state()
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let stored = StoredApiSettings {
         sync_hourly_enabled: state.sync_hourly_enabled,
         selected_days: state.selected_days,
