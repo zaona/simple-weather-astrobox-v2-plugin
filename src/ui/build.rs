@@ -104,8 +104,8 @@ fn build_settings_main(_state: &UiState) -> ui::Element {
 
     let afd_card = build_settings_card(
         afd_svg(),
-        "赞助支持",
-        Some("简明天气完全免费开源"),
+        "支持本项目",
+        Some("赞助可帮助维护天气服务并支持后续功能开发"),
         Some(build_more_link_icon()),
         Some(OPEN_AFD_EVENT),
     );
@@ -120,7 +120,7 @@ fn build_settings_main(_state: &UiState) -> ui::Element {
 
     let qq_card = build_settings_card(
         qq_group_svg(),
-        "QQ群",
+        "QQ交流群",
         Some("947038648"),
         Some(build_more_link_icon()),
         Some(OPEN_QQ_GROUP_EVENT),
@@ -341,7 +341,7 @@ fn build_advanced_send_tab(state: &UiState) -> ui::Element {
     let recent_container = build_recent_locations(state);
     let results_container = build_location_results(state);
 
-    let days_label = ui::Element::new(ui::ElementType::P, Some("同步天数"))
+    let days_label = ui::Element::new(ui::ElementType::P, Some("同步天气天数"))
         .size(16)
         .margin_bottom(8);
 
@@ -350,7 +350,7 @@ fn build_advanced_send_tab(state: &UiState) -> ui::Element {
     let hourly_card = build_settings_card(
         hourly_sync_svg(),
         "同步逐小时天气数据",
-        Some("开启后同步最近 7天逐小时天气"),
+        Some("开启后同步最近一周逐小时天气"),
         Some(build_switch(
             state.sync_hourly_enabled,
             HOURLY_SYNC_TOGGLE_EVENT,

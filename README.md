@@ -34,7 +34,7 @@ update_submodules.bat
 
 ### 构建插件
 
-> 若需启用 API 上报，release 强制要求使用本地配置文件（不要提交到仓库）：
+> release 强制要求使用本地配置文件（不要提交到仓库）：
 >
 > ```bash
 > cp .env.example .env.local
