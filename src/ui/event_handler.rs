@@ -14,6 +14,7 @@ pub const SEND_BUTTON_EVENT: &str = "send_button";
 pub const TAB_PASTE_EVENT: &str = "tab_paste";
 pub const TAB_SETTINGS_EVENT: &str = "tab_settings";
 pub const HOURLY_SYNC_TOGGLE_EVENT: &str = "hourly_sync_toggle";
+pub const ALERTS_SYNC_TOGGLE_EVENT: &str = "alerts_sync_toggle";
 pub const OPEN_HELP_DOC_EVENT: &str = "open_help_doc";
 pub const OPEN_QQ_GROUP_EVENT: &str = "open_qq_group";
 pub const OPEN_AFD_EVENT: &str = "open_afd";
@@ -130,17 +131,24 @@ pub fn ui_event_processor(
             open_afd_page();
         }
         HOURLY_SYNC_TOGGLE_EVENT => {
-            let should_rerender = {
+            {
                 let mut state = ui_state()
                     .write()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 state.sync_hourly_enabled = !state.sync_hourly_enabled;
-                true
-            };
-            if should_rerender {
-                let _ = crate::ui::state::save_all_settings();
-                crate::ui::build::rerender_main_ui();
             }
+            let _ = crate::ui::state::save_all_settings();
+            crate::ui::build::rerender_main_ui();
+        }
+        ALERTS_SYNC_TOGGLE_EVENT => {
+            {
+                let mut state = ui_state()
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.sync_alerts_enabled = !state.sync_alerts_enabled;
+            }
+            let _ = crate::ui::state::save_all_settings();
+            crate::ui::build::rerender_main_ui();
         }
         SEARCH_INPUT_CHANGE_EVENT => {
             let parsed_value = parse_event_value(event_payload);
@@ -265,6 +273,7 @@ fn send_weather_data_advanced() {
         location_lon,
         days,
         sync_hourly_enabled,
+        sync_alerts_enabled,
         selected_from_search,
     ) = {
         let state = ui_state()
@@ -279,6 +288,7 @@ fn send_weather_data_advanced() {
             state.selected_location_lon.clone(),
             state.selected_days,
             state.sync_hourly_enabled,
+            state.sync_alerts_enabled,
             state.selected_from_search,
         )
     };
@@ -300,7 +310,8 @@ fn send_weather_data_advanced() {
                 serde_json::Value::String(WEATHER_SYNC_HOURLY_RANGE.to_string())
             } else {
                 serde_json::Value::Null
-            }
+            },
+            "alerts": sync_alerts_enabled
         }
     });
 

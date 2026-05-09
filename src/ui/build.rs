@@ -341,6 +341,18 @@ fn build_advanced_send_tab(state: &UiState) -> ui::Element {
         )),
         None,
     )
+    .margin_bottom(8);
+
+    let alerts_card = build_settings_card(
+        icons::alerts_svg(),
+        "同步天气预警数据",
+        Some("开启后同步天气预警灾害信息"),
+        Some(build_switch(
+            state.sync_alerts_enabled,
+            ALERTS_SYNC_TOGGLE_EVENT,
+        )),
+        None,
+    )
     .margin_bottom(18);
 
     let send_button =
@@ -359,6 +371,7 @@ fn build_advanced_send_tab(state: &UiState) -> ui::Element {
         .child(results_container)
         .child(days_card)
         .child(hourly_card)
+        .child(alerts_card)
         .child(send_button)
 }
 
@@ -371,13 +384,6 @@ fn build_recent_locations(state: &UiState) -> ui::Element {
     if state.recent_locations.is_empty() {
         return container;
     }
-
-    let label = ui::Element::new(ui::ElementType::P, Some("最近地区"))
-        .size(14)
-        .margin_left(12)
-        .margin_bottom(8)
-        .text_color("#BBBBBB");
-    container = container.child(label);
 
     let mut row = ui::Element::new(ui::ElementType::Div, None)
         .flex()
@@ -436,13 +442,6 @@ fn build_location_results(state: &UiState) -> ui::Element {
                 .text_color("#888888"),
         );
     }
-
-    let label = ui::Element::new(ui::ElementType::P, Some("具体地区"))
-        .size(14)
-        .margin_left(12)
-        .margin_bottom(8)
-        .text_color("#BBBBBB");
-    container = container.child(label);
 
     let mut row = ui::Element::new(ui::ElementType::Div, None)
         .flex()

@@ -6,7 +6,7 @@ const WEATHER_API_HOST: Option<&str> = option_env!("WEATHER_API_HOST");
 const WEATHER_API_CLIENT_TYPE: Option<&str> = option_env!("WEATHER_API_CLIENT_TYPE");
 const WEATHER_API_KEY: Option<&str> = option_env!("WEATHER_API_KEY");
 
-fn default_sync_hourly_enabled() -> bool {
+fn default_bool_true() -> bool {
     true
 }
 
@@ -15,6 +15,7 @@ pub struct UiState {
     pub current_tab: MainTab,
     pub settings_loaded: bool,
     pub sync_hourly_enabled: bool,
+    pub sync_alerts_enabled: bool,
     pub selected_days: u32,
     pub search_query: String,
     pub search_results: Vec<LocationOption>,
@@ -84,7 +85,8 @@ pub fn ui_state() -> &'static RwLock<UiState> {
             root_element_id: None,
             current_tab: MainTab::PasteData,
             settings_loaded: false,
-            sync_hourly_enabled: default_sync_hourly_enabled(),
+            sync_hourly_enabled: default_bool_true(),
+            sync_alerts_enabled: default_bool_true(),
             selected_days: 7,
             search_query: String::new(),
             search_results: Vec::new(),
@@ -106,8 +108,10 @@ pub fn ui_state() -> &'static RwLock<UiState> {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct StoredApiSettings {
-    #[serde(default = "default_sync_hourly_enabled")]
+    #[serde(default = "default_bool_true")]
     sync_hourly_enabled: bool,
+    #[serde(default = "default_bool_true")]
+    sync_alerts_enabled: bool,
     #[serde(default)]
     selected_days: u32,
     #[serde(default)]
@@ -156,6 +160,7 @@ pub fn load_api_settings_once() {
                     .write()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 state.sync_hourly_enabled = stored.sync_hourly_enabled;
+                state.sync_alerts_enabled = stored.sync_alerts_enabled;
                 state.selected_days = if stored.selected_days == 0 {
                     7
                 } else {
@@ -197,6 +202,7 @@ pub fn save_all_settings() -> Result<(), String> {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let stored = StoredApiSettings {
         sync_hourly_enabled: state.sync_hourly_enabled,
+        sync_alerts_enabled: state.sync_alerts_enabled,
         selected_days: state.selected_days,
         selected_location_id: state.selected_location_id.clone(),
         selected_location_name: state.selected_location_name.clone(),
