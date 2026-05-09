@@ -11,3 +11,4 @@ dist
 /scripts/__pycache__
 API.md
 .codex
+.claude

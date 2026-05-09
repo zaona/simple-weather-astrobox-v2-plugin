@@ -1,5 +1,6 @@
 use super::SYNC_CARD_ID;
 use super::event_handler::*;
+use super::icons;
 use super::state::*;
 use crate::astrobox::psys_host;
 use crate::astrobox::psys_host::ui;
@@ -69,7 +70,7 @@ fn build_tabs(state: &UiState) -> ui::Element {
 
     let paste_tab = build_tab_button(
         "同步数据",
-        send_tab_svg(),
+        icons::send_tab_svg(),
         state.current_tab == MainTab::PasteData,
         TAB_PASTE_EVENT,
     )
@@ -77,7 +78,7 @@ fn build_tabs(state: &UiState) -> ui::Element {
 
     let custom_tab = build_tab_button(
         "设置",
-        api_tab_svg(),
+        icons::api_tab_svg(),
         state.current_tab == MainTab::Settings,
         TAB_SETTINGS_EVENT,
     );
@@ -103,7 +104,7 @@ fn build_settings_main(_state: &UiState) -> ui::Element {
     root = root.child(more_title);
 
     let afd_card = build_settings_card(
-        afd_svg(),
+        icons::afd_svg(),
         "支持本项目",
         Some("赞助可帮助维护天气服务并支持后续功能开发"),
         Some(build_more_link_icon()),
@@ -111,7 +112,7 @@ fn build_settings_main(_state: &UiState) -> ui::Element {
     );
 
     let help_card = build_settings_card(
-        help_doc_svg(),
+        icons::help_svg(),
         "帮助文档",
         Some("操作步骤与常见问题解答"),
         Some(build_more_link_icon()),
@@ -119,7 +120,7 @@ fn build_settings_main(_state: &UiState) -> ui::Element {
     );
 
     let qq_card = build_settings_card(
-        qq_group_svg(),
+        icons::qq_group_svg(),
         "QQ交流群",
         Some("947038648"),
         Some(build_more_link_icon()),
@@ -135,28 +136,28 @@ fn build_settings_main(_state: &UiState) -> ui::Element {
     let build_time = format_beijing_time(build_time_raw);
 
     let build_time_row = build_settings_card(
-        build_time_svg(),
+        icons::time_svg(),
         "构建时间",
         None,
         Some(build_value_text(&build_time)),
         None,
     );
     let build_user_row = build_settings_card(
-        build_user_svg(),
+        icons::user_svg(),
         "构建用户",
         None,
         Some(build_value_text(build_user)),
         None,
     );
     let build_branch_row = build_settings_card(
-        build_branch_svg(),
+        icons::branch_svg(),
         "当前分支",
         None,
         Some(build_value_text(build_branch)),
         None,
     );
     let build_hash_row = build_settings_card(
-        build_hash_svg(),
+        icons::hash_svg(),
         "当前hash",
         None,
         Some(build_value_text(&build_hash)),
@@ -297,22 +298,6 @@ fn build_value_text(value: &str) -> ui::Element {
         .text_color("#BBBBBB")
 }
 
-fn build_time_svg() -> String {
-    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><circle cx="128" cy="128" r="96" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><polyline points="128 72 128 128 184 128" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg>"#.to_string()
-}
-
-fn build_user_svg() -> String {
-    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><circle cx="128" cy="96" r="64" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><path d="M32,216c19.37-33.47,54.55-56,96-56s76.63,22.53,96,56" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg>"#.to_string()
-}
-
-fn build_branch_svg() -> String {
-    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><path d="M80,168V144a16,16,0,0,1,16-16h88a16,16,0,0,0,16-16V88" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><line x1="80" y1="88" x2="80" y2="168" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><circle cx="80" cy="64" r="24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><circle cx="200" cy="64" r="24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><circle cx="80" cy="192" r="24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg>"#.to_string()
-}
-
-fn build_hash_svg() -> String {
-    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><line x1="48" y1="96" x2="224" y2="96" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><line x1="176" y1="40" x2="144" y2="216" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><line x1="112" y1="40" x2="80" y2="216" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><line x1="32" y1="160" x2="208" y2="160" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg>"#.to_string()
-}
-
 fn build_advanced_send_tab(state: &UiState) -> ui::Element {
     let search_label = ui::Element::new(ui::ElementType::P, Some("搜索城市"))
         .size(16)
@@ -348,7 +333,7 @@ fn build_advanced_send_tab(state: &UiState) -> ui::Element {
     let days_row = build_days_row(state);
 
     let hourly_card = build_settings_card(
-        hourly_sync_svg(),
+        icons::hourly_sync_svg(),
         "同步逐小时天气数据",
         Some("开启后同步最近一周逐小时天气"),
         Some(build_switch(
@@ -361,7 +346,7 @@ fn build_advanced_send_tab(state: &UiState) -> ui::Element {
     .margin_bottom(4);
 
     let send_button =
-        build_icon_text_button_full("同步数据", send_tab_svg_blue(), SEND_BUTTON_EVENT)
+        build_icon_text_button_full("同步数据", icons::send_tab_svg(), SEND_BUTTON_EVENT)
             .bg("#0090FF26")
             .text_color("#0090FF")
             .margin_top(16);
@@ -379,10 +364,6 @@ fn build_advanced_send_tab(state: &UiState) -> ui::Element {
         .child(days_row)
         .child(hourly_card)
         .child(send_button)
-}
-
-fn hourly_sync_svg() -> String {
-    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><path d="M128,32a96,96,0,1,0,96,96A96,96,0,0,0,128,32Zm40,104H128a8,8,0,0,1-8-8V72a8,8,0,0,1,16,0v48h32a8,8,0,0,1,0,16Z" fill="currentColor"/></svg>"#.to_string()
 }
 
 fn build_recent_locations(state: &UiState) -> ui::Element {
@@ -412,9 +393,10 @@ fn build_recent_locations(state: &UiState) -> ui::Element {
     for (idx, item) in state.recent_locations.iter().enumerate() {
         let label = build_location_label(item);
         let is_selected = item.id == state.selected_location_id;
+        let pin_svg = if is_selected { icons::location_pin_filled_svg() } else { icons::location_pin_svg() };
         let btn = build_location_chip(
             &label,
-            location_pin_svg(is_selected),
+            pin_svg,
             &format!("{}{}", SELECT_RECENT_PREFIX, idx),
             is_selected,
         );
@@ -476,9 +458,10 @@ fn build_location_results(state: &UiState) -> ui::Element {
     for (idx, item) in state.search_results.iter().enumerate() {
         let label = build_location_label(item);
         let is_selected = item.id == state.selected_location_id;
+        let pin_svg = if is_selected { icons::location_pin_filled_svg() } else { icons::location_pin_svg() };
         let btn = build_location_chip(
             &label,
-            location_pin_svg(is_selected),
+            pin_svg,
             &format!("{}{}", SELECT_LOCATION_PREFIX, idx),
             is_selected,
         );
@@ -558,9 +541,9 @@ const SWITCH_H: u32 = 24;
 
 fn build_switch(is_on: bool, event_id: &str) -> ui::Element {
     let svg = if is_on {
-        switch_on_svg()
+        icons::switch_on_svg()
     } else {
-        switch_off_svg()
+        icons::switch_off_svg()
     };
 
     let icon = ui::Element::new(ui::ElementType::Svg, Some(&svg))
@@ -650,44 +633,13 @@ fn build_section_title(text: &str) -> ui::Element {
 }
 
 fn build_more_link_icon() -> ui::Element {
-    let svg = more_link_svg();
+    let svg = icons::more_link_svg();
     ui::Element::new(ui::ElementType::Svg, Some(&svg))
         .width(18)
         .height(18)
         .text_color("#0088FF")
 }
 
-fn more_link_svg() -> String {
-    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><polyline points="216 104 215.99 40.01 152 40" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><line x1="136" y1="120" x2="216" y2="40" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><path d="M184,136v72a8,8,0,0,1-8,8H48a8,8,0,0,1-8-8V80a8,8,0,0,1,8-8h72" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg>"#.to_string()
-}
-
-fn help_doc_svg() -> String {
-    help_svg()
-}
-
-fn qq_group_svg() -> String {
-    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><circle cx="84" cy="108" r="52" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><path d="M10.23,200a88,88,0,0,1,147.54,0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><path d="M172,160a87.93,87.93,0,0,1,73.77,40" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><path d="M152.69,59.7A52,52,0,1,1,172,160" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg>"#.to_string()
-}
-
-fn afd_svg() -> String {
-    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><path d="M48,208H16a8,8,0,0,1-8-8V160a8,8,0,0,1,8-8H48" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><path d="M112,160h32l67-15.41a16.61,16.61,0,0,1,21,16h0a16.59,16.59,0,0,1-9.18,14.85L184,192l-64,16H48V152l25-25a24,24,0,0,1,17-7H140a20,20,0,0,1,20,20h0a20,20,0,0,1-20,20Z" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><path d="M96.73,120C87,107.72,80,94.56,80,80c0-21.69,17.67-40,39.46-40A39.12,39.12,0,0,1,156,64a39.12,39.12,0,0,1,36.54-24C214.33,40,232,58.31,232,80c0,29.23-28.18,55.07-50.22,71.32" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg>"#.to_string()
-}
-
-fn location_pin_svg(selected: bool) -> String {
-    if selected {
-        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><line x1="128" y1="240" x2="128" y2="208" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><circle cx="128" cy="128" r="80" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><line x1="128" y1="16" x2="128" y2="48" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><line x1="16" y1="128" x2="48" y2="128" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><line x1="240" y1="128" x2="208" y2="128" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><circle cx="128" cy="128" r="32" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg>"#.to_string()
-    } else {
-        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><line x1="128" y1="240" x2="128" y2="208" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><circle cx="128" cy="128" r="80" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><line x1="128" y1="16" x2="128" y2="48" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><line x1="16" y1="128" x2="48" y2="128" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><line x1="240" y1="128" x2="208" y2="128" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg>"#.to_string()
-    }
-}
-
-fn switch_off_svg() -> String {
-    r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" fill="none" version="1.1" width="35" height="20" viewBox="0 0 35 20"><rect x="0" y="0" width="35" height="20" rx="10" fill="#00000F" fill-opacity="0.30000001192092896"/><rect x="0.5" y="0.5" width="34" height="19" rx="9.5" fill-opacity="0" stroke-opacity="0.15000000596046448" stroke="#FFFFFF" fill="none" stroke-width="1"/><ellipse cx="10" cy="10" rx="9" ry="9" fill="#FFFFFF" fill-opacity="1"/></svg>"##.to_string()
-}
-
-fn switch_on_svg() -> String {
-    r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" fill="none" version="1.1" width="35" height="20" viewBox="0 0 35 20"><rect x="0" y="0" width="35" height="20" rx="10" fill="#0090FF" fill-opacity="1"/><rect x="0.5" y="0.5" width="34" height="19" rx="9.5" fill-opacity="0" stroke-opacity="0.15000000596046448" stroke="#FFFFFF" fill="none" stroke-width="1"/><ellipse cx="25" cy="10" rx="9" ry="9" fill="#FFFFFF" fill-opacity="1"/></svg>"##.to_string()
-}
 
 fn build_tab_button(label: &str, icon_svg: String, is_active: bool, event_id: &str) -> ui::Element {
     let icon = ui::Element::new(ui::ElementType::Svg, Some(&icon_svg))
@@ -743,7 +695,7 @@ fn build_icon_text_button_full(label: &str, icon_svg: String, event_id: &str) ->
 }
 
 fn build_search_inline_button(event_id: &str) -> ui::Element {
-    let icon = ui::Element::new(ui::ElementType::Svg, Some(&search_svg()))
+    let icon = ui::Element::new(ui::ElementType::Svg, Some(&icons::search_svg()))
         .width(16)
         .height(16);
 
@@ -807,51 +759,3 @@ fn build_location_label(item: &LocationOption) -> String {
     }
 }
 
-fn search_svg() -> String {
-    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><circle cx="112" cy="112" r="80" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><line x1="168.57" y1="168.57" x2="224" y2="224" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg>"#.to_string()
-}
-
-fn api_tab_svg() -> String {
-    r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
-<rect width="256" height="256" fill="none"/>
-<line x1="184" y1="80" x2="216" y2="80" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
-<line x1="40" y1="80" x2="152" y2="80" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
-<line x1="120" y1="176" x2="216" y2="176" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
-<line x1="40" y1="176" x2="88" y2="176" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
-<line x1="152" y1="56" x2="152" y2="104" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
-<line x1="88" y1="152" x2="88" y2="200" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
-</svg>"##
-        .to_string()
-}
-
-fn send_tab_svg() -> String {
-    r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
-<rect width="256" height="256" fill="none"/>
-<path d="M191.11,112.89c24-24,25.5-52.55,24.75-65.28a8,8,0,0,0-7.47-7.47c-12.73-.75-41.26.73-65.28,24.75L80,128l48,48Z" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
-<path d="M136,72H74.35a8,8,0,0,0-5.65,2.34L34.35,108.69a8,8,0,0,0,4.53,13.57L80,128" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
-<path d="M184,120v61.65a8,8,0,0,1-2.34,5.65l-34.35,34.35a8,8,0,0,1-13.57-4.53L128,176" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
-<path d="M94.56,187.82C90.69,196.31,77.65,216,40,216c0-37.65,19.69-50.69,28.18-54.56" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
-</svg>"##
-        .to_string()
-}
-
-fn send_tab_svg_blue() -> String {
-    r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
-<rect width="256" height="256" fill="none"/>
-<path d="M191.11,112.89c24-24,25.5-52.55,24.75-65.28a8,8,0,0,0-7.47-7.47c-12.73-.75-41.26.73-65.28,24.75L80,128l48,48Z" fill="none" stroke="#0090FF" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
-<path d="M136,72H74.35a8,8,0,0,0-5.65,2.34L34.35,108.69a8,8,0,0,0,4.53,13.57L80,128" fill="none" stroke="#0090FF" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
-<path d="M184,120v61.65a8,8,0,0,1-2.34,5.65l-34.35,34.35a8,8,0,0,1-13.57-4.53L128,176" fill="none" stroke="#0090FF" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
-<path d="M94.56,187.82C90.69,196.31,77.65,216,40,216c0-37.65,19.69-50.69,28.18-54.56" fill="none" stroke="#0090FF" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
-</svg>"##
-        .to_string()
-}
-
-fn help_svg() -> String {
-    r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
-<rect width="256" height="256" fill="none"/>
-<circle cx="128" cy="180" r="12" fill="#FFFFFF"/>
-<path d="M128,144v-8c17.67,0,32-12.54,32-28s-14.33-28-32-28S96,92.54,96,108v4" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
-<circle cx="128" cy="128" r="96" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
-</svg>"##
-        .to_string()
-}

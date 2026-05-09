@@ -1,6 +1,7 @@
 pub mod api_client;
 pub mod build;
 pub mod event_handler;
+pub mod icons;
 pub mod state;
 
 pub use build::render_main_ui;
