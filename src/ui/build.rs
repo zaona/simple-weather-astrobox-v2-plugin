@@ -56,34 +56,33 @@ pub fn render_sync_card(card_id: &str) {
 }
 
 fn build_tabs(state: &UiState) -> ui::Element {
-    let tabs_wrapper = ui::Element::new(ui::ElementType::Div, None)
+    let tabs_root = ui::Element::new(ui::ElementType::TabsRoot, None)
         .flex()
         .justify_center()
         .margin_bottom(20);
 
-    let tabs_container = ui::Element::new(ui::ElementType::Div, None)
+    let tabs_list = ui::Element::new(ui::ElementType::TabsList, None)
         .flex()
-        .flex_direction(ui::FlexDirection::Row)
         .bg("#1E1E1F")
         .radius(999)
-        .padding(4);
+        .padding(4)
+        .gap(4);
 
-    let paste_tab = build_tab_button(
+    let paste_trigger = build_tab_trigger(
         "同步数据",
         icons::send_tab_svg(),
         state.current_tab == MainTab::PasteData,
         TAB_PASTE_EVENT,
-    )
-    .margin_right(4);
+    );
 
-    let custom_tab = build_tab_button(
+    let settings_trigger = build_tab_trigger(
         "设置",
         icons::api_tab_svg(),
         state.current_tab == MainTab::Settings,
         TAB_SETTINGS_EVENT,
     );
 
-    tabs_wrapper.child(tabs_container.child(paste_tab).child(custom_tab))
+    tabs_root.child(tabs_list.child(paste_trigger).child(settings_trigger))
 }
 
 fn build_send_tab(state: &UiState) -> ui::Element {
@@ -98,7 +97,8 @@ fn build_settings_main(_state: &UiState) -> ui::Element {
     let mut root = ui::Element::new(ui::ElementType::Div, None)
         .flex()
         .flex_direction(ui::FlexDirection::Column)
-        .width_full();
+        .width_full()
+        .gap(8);
 
     let more_title = build_section_title("更多内容");
     root = root.child(more_title);
@@ -164,13 +164,13 @@ fn build_settings_main(_state: &UiState) -> ui::Element {
         None,
     );
 
-    root.child(afd_card.margin_bottom(8))
-        .child(help_card.margin_bottom(8))
-        .child(qq_card.margin_bottom(18))
+    root.child(afd_card)
+        .child(help_card)
+        .child(qq_card.margin_bottom(10))
         .child(build_title)
-        .child(build_time_row.margin_bottom(8))
-        .child(build_user_row.margin_bottom(8))
-        .child(build_branch_row.margin_bottom(8))
+        .child(build_time_row)
+        .child(build_user_row)
+        .child(build_branch_row)
         .child(build_hash_row)
 }
 
@@ -301,8 +301,7 @@ fn build_value_text(value: &str) -> ui::Element {
 fn build_advanced_send_tab(state: &UiState) -> ui::Element {
     let search_label = ui::Element::new(ui::ElementType::P, Some("搜索城市"))
         .size(15)
-        .margin_left(12)
-        .margin_bottom(8);
+        .margin_left(12);
 
     let search_input = ui::Element::new(ui::ElementType::Input, Some(&state.search_query))
         .on(ui::Event::Change, SEARCH_INPUT_CHANGE_EVENT)
@@ -312,8 +311,7 @@ fn build_advanced_send_tab(state: &UiState) -> ui::Element {
         .height(INPUT_HEIGHT)
         .width_full()
         .padding_left(8)
-        .padding_right(8)
-        .margin_right(8);
+        .padding_right(8);
 
     let search_button = build_search_inline_button(SEARCH_BUTTON_EVENT);
 
@@ -322,14 +320,16 @@ fn build_advanced_send_tab(state: &UiState) -> ui::Element {
         .flex_direction(ui::FlexDirection::Row)
         .align_center()
         .width_full()
-        .margin_bottom(8)
+        .gap(8)
         .child(search_input)
         .child(search_button);
 
+    let has_recent = !state.recent_locations.is_empty();
+    let has_search = !state.search_query.trim().is_empty();
     let recent_container = build_recent_locations(state);
     let results_container = build_location_results(state);
 
-    let days_card = build_days_card(state).margin_top(10).margin_bottom(8);
+    let days_card = build_days_card(state).margin_top(10);
 
     let hourly_card = build_settings_card(
         icons::hourly_sync_svg(),
@@ -340,8 +340,7 @@ fn build_advanced_send_tab(state: &UiState) -> ui::Element {
             HOURLY_SYNC_TOGGLE_EVENT,
         )),
         None,
-    )
-    .margin_bottom(8);
+    );
 
     let alerts_card = build_settings_card(
         icons::alerts_svg(),
@@ -353,44 +352,41 @@ fn build_advanced_send_tab(state: &UiState) -> ui::Element {
         )),
         None,
     )
-    .margin_bottom(18);
+    .margin_bottom(10);
 
     let send_button =
         build_icon_text_button_full("同步数据", icons::send_tab_svg(), SEND_BUTTON_EVENT)
             .bg("#0090FF26")
             .text_color("#0090FF");
 
-    let root = ui::Element::new(ui::ElementType::Div, None)
+    let mut root = ui::Element::new(ui::ElementType::Div, None)
         .flex()
         .flex_direction(ui::FlexDirection::Column)
-        .width_full();
+        .width_full()
+        .gap(8);
 
-    root.child(search_label)
-        .child(search_row)
-        .child(recent_container)
-        .child(results_container)
-        .child(days_card)
+    root = root.child(search_label).child(search_row);
+    if has_recent {
+        root = root.child(recent_container);
+    }
+    if has_search {
+        root = root.child(results_container);
+    }
+    root.child(days_card)
         .child(hourly_card)
         .child(alerts_card)
         .child(send_button)
 }
 
 fn build_recent_locations(state: &UiState) -> ui::Element {
-    let mut container = ui::Element::new(ui::ElementType::Div, None)
-        .flex()
-        .flex_direction(ui::FlexDirection::Column)
-        .width_full();
-
     if state.recent_locations.is_empty() {
-        return container;
+        return ui::Element::new(ui::ElementType::Div, None);
     }
 
-    let mut row = ui::Element::new(ui::ElementType::Div, None)
-        .flex()
-        .flex_direction(ui::FlexDirection::Row)
-        .align_center()
-        .margin_bottom(8);
-    let mut count = 0usize;
+    let mut grid = ui::Element::new(ui::ElementType::Grid, None)
+        .grid_template_columns("1fr 1fr 1fr")
+        .gap(8)
+        .width_full();
 
     for (idx, item) in state.recent_locations.iter().enumerate() {
         let label = build_location_label(item);
@@ -402,53 +398,27 @@ fn build_recent_locations(state: &UiState) -> ui::Element {
             &format!("{}{}", SELECT_RECENT_PREFIX, idx),
             is_selected,
         );
-
-        row = row.child(btn);
-        count += 1;
-        if count < 3 {
-            row = row.child(ui::Element::new(ui::ElementType::Span, None).width(8));
-        } else {
-            container = container.child(row);
-            row = ui::Element::new(ui::ElementType::Div, None)
-                .flex()
-                .flex_direction(ui::FlexDirection::Row)
-                .align_center()
-                .margin_bottom(8);
-            count = 0;
-        }
+        grid = grid.child(btn);
     }
 
-    if count > 0 {
-        container = container.child(row);
-    }
-
-    container
+    grid
 }
 
 fn build_location_results(state: &UiState) -> ui::Element {
-    let mut container = ui::Element::new(ui::ElementType::Div, None)
-        .flex()
-        .flex_direction(ui::FlexDirection::Column)
-        .width_full();
-
     if state.search_query.trim().is_empty() {
-        return container;
+        return ui::Element::new(ui::ElementType::Div, None);
     }
 
     if state.search_results.is_empty() {
-        return container.child(
-            ui::Element::new(ui::ElementType::P, Some("暂无搜索结果"))
-                .size(13)
-                .text_color("#888888"),
-        );
+        return ui::Element::new(ui::ElementType::P, Some("暂无搜索结果"))
+            .size(13)
+            .text_color("#888888");
     }
 
-    let mut row = ui::Element::new(ui::ElementType::Div, None)
-        .flex()
-        .flex_direction(ui::FlexDirection::Row)
-        .align_center()
-        .margin_bottom(8);
-    let mut count = 0usize;
+    let mut grid = ui::Element::new(ui::ElementType::Grid, None)
+        .grid_template_columns("1fr 1fr 1fr")
+        .gap(8)
+        .width_full();
 
     for (idx, item) in state.search_results.iter().enumerate() {
         let label = build_location_label(item);
@@ -460,27 +430,10 @@ fn build_location_results(state: &UiState) -> ui::Element {
             &format!("{}{}", SELECT_LOCATION_PREFIX, idx),
             is_selected,
         );
-
-        row = row.child(btn);
-        count += 1;
-        if count < 3 {
-            row = row.child(ui::Element::new(ui::ElementType::Span, None).width(8));
-        } else {
-            container = container.child(row);
-            row = ui::Element::new(ui::ElementType::Div, None)
-                .flex()
-                .flex_direction(ui::FlexDirection::Row)
-                .align_center()
-                .margin_bottom(8);
-            count = 0;
-        }
+        grid = grid.child(btn);
     }
 
-    if count > 0 {
-        container = container.child(row);
-    }
-
-    container
+    grid
 }
 
 fn build_days_card(state: &UiState) -> ui::Element {
@@ -525,26 +478,11 @@ pub fn rerender_main_ui() {
 }
 
 const INPUT_HEIGHT: u32 = 40;
-const SWITCH_W: u32 = 35;
-const SWITCH_H: u32 = 20;
 
 fn build_switch(is_on: bool, event_id: &str) -> ui::Element {
-    let svg = if is_on {
-        icons::switch_on_svg()
-    } else {
-        icons::switch_off_svg()
-    };
-
-    let icon = ui::Element::new(ui::ElementType::Svg, Some(&svg))
-        .width(SWITCH_W)
-        .height(SWITCH_H);
-
-    ui::Element::new(ui::ElementType::Button, None)
-        .without_default_styles()
-        .on(ui::Event::Click, event_id)
-        .width(SWITCH_W)
-        .height(SWITCH_H)
-        .child(icon)
+    ui::Element::new(ui::ElementType::Switch, None)
+        .on(ui::Event::Change, event_id)
+        .prop("checked", if is_on { "true" } else { "false" })
 }
 
 fn build_settings_card(
@@ -593,8 +531,8 @@ fn build_settings_card(
         .padding_right(12)
         .padding_top(10)
         .padding_bottom(10)
+        .gap(10)
         .child(icon_wrap)
-        .child(ui::Element::new(ui::ElementType::Span, None).width(10))
         .child(text_col);
 
     if let Some(right_el) = right {
@@ -618,7 +556,6 @@ fn build_section_title(text: &str) -> ui::Element {
         .size(13)
         .text_color("#888888")
         .margin_left(12)
-        .margin_bottom(8)
 }
 
 fn build_more_link_icon() -> ui::Element {
@@ -630,14 +567,14 @@ fn build_more_link_icon() -> ui::Element {
 }
 
 
-fn build_tab_button(label: &str, icon_svg: String, is_active: bool, event_id: &str) -> ui::Element {
+fn build_tab_trigger(label: &str, icon_svg: String, is_active: bool, event_id: &str) -> ui::Element {
     let icon = ui::Element::new(ui::ElementType::Svg, Some(&icon_svg))
         .width(22)
         .height(22);
 
     let text = ui::Element::new(ui::ElementType::Span, Some(label)).size(14);
 
-    ui::Element::new(ui::ElementType::Button, None)
+    ui::Element::new(ui::ElementType::TabsTrigger, None)
         .without_default_styles()
         .on(ui::Event::Click, event_id)
         .radius(999)
@@ -649,8 +586,8 @@ fn build_tab_button(label: &str, icon_svg: String, is_active: bool, event_id: &s
         .text_color(if is_active { "#FFFFFF" } else { "#BBBBBB" })
         .flex()
         .align_center()
+        .gap(5)
         .child(icon)
-        .child(ui::Element::new(ui::ElementType::Span, None).width(5))
         .child(text)
 }
 
@@ -678,8 +615,8 @@ fn build_icon_text_button_full(label: &str, icon_svg: String, event_id: &str) ->
         .width_full()
         .flex()
         .align_center()
+        .gap(8)
         .child(icon)
-        .child(ui::Element::new(ui::ElementType::Span, None).width(8))
         .child(text)
 }
 
@@ -727,8 +664,8 @@ fn build_location_chip(
         .text_color(if selected { "#0090FF" } else { "#FFFFFF" })
         .flex()
         .align_center()
+        .gap(6)
         .child(icon)
-        .child(ui::Element::new(ui::ElementType::Span, None).width(6))
         .child(text)
 }
 

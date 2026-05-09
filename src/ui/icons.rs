@@ -50,14 +50,6 @@ pub fn location_pin_filled_svg() -> String {
     r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><line x1="128" y1="240" x2="128" y2="208" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><circle cx="128" cy="128" r="80" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><line x1="128" y1="16" x2="128" y2="48" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><line x1="16" y1="128" x2="48" y2="128" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><line x1="240" y1="128" x2="208" y2="128" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><circle cx="128" cy="128" r="32" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg>"#.to_string()
 }
 
-pub fn switch_off_svg() -> String {
-    r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" fill="none" version="1.1" width="35" height="20" viewBox="0 0 35 20"><rect x="0" y="0" width="35" height="20" rx="10" fill="#00000F" fill-opacity="0.30000001192092896"/><rect x="0.5" y="0.5" width="34" height="19" rx="9.5" fill-opacity="0" stroke-opacity="0.15000000596046448" stroke="#FFFFFF" fill="none" stroke-width="1"/><ellipse cx="10" cy="10" rx="9" ry="9" fill="#FFFFFF" fill-opacity="1"/></svg>"##.to_string()
-}
-
-pub fn switch_on_svg() -> String {
-    r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" fill="none" version="1.1" width="35" height="20" viewBox="0 0 35 20"><rect x="0" y="0" width="35" height="20" rx="10" fill="#0090FF" fill-opacity="1"/><rect x="0.5" y="0.5" width="34" height="19" rx="9.5" fill-opacity="0" stroke-opacity="0.15000000596046448" stroke="#FFFFFF" fill="none" stroke-width="1"/><ellipse cx="25" cy="10" rx="9" ry="9" fill="#FFFFFF" fill-opacity="1"/></svg>"##.to_string()
-}
-
 pub fn search_svg() -> String {
     r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><circle cx="112" cy="112" r="80" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><line x1="168.57" y1="168.57" x2="224" y2="224" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg>"#.to_string()
 }
