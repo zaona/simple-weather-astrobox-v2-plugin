@@ -1,14 +1,14 @@
 use serde_json;
 use wit_bindgen::FutureReader;
 
-use crate::exports::astrobox::psys_plugin::{event, lifecycle};
+use crate::exports::astrobox::psys_plugin::{event_v3 as event, lifecycle};
 
 pub mod logger;
 pub mod ui;
 
 wit_bindgen::generate!({
     path: "wit",
-    world: "psys-world",
+    world: "psys-world-v3",
     generate_all,
 });
 
@@ -54,7 +54,7 @@ impl event::Guest for MyPlugin {
         reader
     }
 
-    fn on_ui_event(
+    fn on_ui_event_v3(
         event_id: _rt::String,
         event_type: event::Event,
         event_payload: _rt::String,

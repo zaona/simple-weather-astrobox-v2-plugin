@@ -7,7 +7,7 @@
     "website": "https://weather.zaona.top/",
     "entry": "simple-weather-astrobox-v2-plugin.wasm",
     "wasi_version": 2,
-    "api_level": 2,
+    "api_level": 3,
     "permissions": [
         "interconnect",
         "thirdpartyapp",

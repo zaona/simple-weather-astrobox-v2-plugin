@@ -3,7 +3,7 @@ use super::event_handler::*;
 use super::icons;
 use super::state::*;
 use crate::astrobox::psys_host;
-use crate::astrobox::psys_host::ui;
+use crate::astrobox::psys_host::ui_v3 as ui;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn render_main_ui(element_id: &str) {
@@ -18,7 +18,7 @@ pub fn render_main_ui(element_id: &str) {
     crate::ui::event_handler::resolve_recent_locations_if_needed();
 
     let ui_tree = build_main_ui();
-    psys_host::ui::render(element_id, ui_tree);
+    psys_host::ui_v3::render(element_id, ui_tree);
 }
 
 pub fn build_main_ui() -> ui::Element {
@@ -52,7 +52,7 @@ pub fn render_sync_card(card_id: &str) {
     }
     let text = build_sync_card_text();
     tracing::info!("render_sync_card content: {}", text);
-    psys_host::ui::render_to_text_card(card_id, &text);
+    psys_host::ui_v3::render_to_text_card(card_id, &text);
 }
 
 fn build_tabs(state: &UiState) -> ui::Element {
@@ -520,7 +520,7 @@ pub fn rerender_main_ui() {
 
     if let Some(element_id) = element_id {
         let ui_tree = build_main_ui();
-        psys_host::ui::render(&element_id, ui_tree);
+        psys_host::ui_v3::render(&element_id, ui_tree);
     }
 }
 
@@ -747,4 +747,3 @@ fn build_location_label(item: &LocationOption) -> String {
             .to_string()
     }
 }
-

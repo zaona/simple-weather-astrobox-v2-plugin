@@ -22,6 +22,16 @@ com.application.zaona.weather
 git submodule update --init --remote --recursive
 ```
 
+### 安装 Rust WASM target
+
+项目默认通过 `.cargo/config.toml` 构建到 `wasm32-wasip2`，首次构建前先安装该 target：
+
+```bash
+rustup target add wasm32-wasip2
+```
+
+如果你的 Rust 不是通过 `rustup` 管理，需要先切到 `rustup` 工具链，或自行安装 `wasm32-wasip2` 对应标准库。
+
 ### 更新子模块
 
 ```bash

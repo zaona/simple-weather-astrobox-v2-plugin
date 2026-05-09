@@ -10,6 +10,58 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+def resolve_target_triple(root_dir, cli_target):
+    if cli_target:
+        return cli_target
+
+    cargo_config_path = root_dir / ".cargo" / "config.toml"
+    if cargo_config_path.exists():
+        try:
+            cargo_config = cargo_config_path.read_text(encoding="utf-8")
+        except OSError:
+            cargo_config = ""
+
+        for raw_line in cargo_config.splitlines():
+            line = raw_line.strip()
+            if not line.startswith("target"):
+                continue
+            if "=" not in line:
+                continue
+            _, value = line.split("=", 1)
+            value = value.strip().strip('"').strip("'")
+            if value:
+                return value
+
+    return None
+
+
+def ensure_rust_target_available(target):
+    if not target:
+        return
+
+    result = subprocess.run(
+        ["rustc", "--print", "target-libdir", "--target", target],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr or result.stdout)
+        sys.stderr.write(
+            f"error: 无法确认 Rust target `{target}` 是否可用，请先检查本地 Rust 工具链。\n"
+        )
+        sys.exit(result.returncode or 1)
+
+    target_libdir = Path((result.stdout or "").strip())
+    if target_libdir.is_dir():
+        return
+
+    sys.stderr.write(
+        f"error: 当前缺少 Rust target `{target}`，其标准库目录不存在：{target_libdir}\n"
+        f"error: 请先执行 `rustup target add {target}`，然后重新运行构建命令。\n"
+    )
+    sys.exit(1)
+
+
 def load_local_env(root_dir):
     env_path = root_dir / ".env.local"
     if not env_path.exists():
@@ -231,12 +283,12 @@ def main():
         cargo_args.append("--release")
         profile = "release"
 
+    root_dir = Path(__file__).resolve().parent.parent
+    resolved_target = resolve_target_triple(root_dir, args.target)
     if args.target:
         cargo_args.extend(["--target", args.target])
 
     cargo_args.extend(extra)
-
-    root_dir = Path(__file__).resolve().parent.parent
     manifest_path = root_dir / "manifest.json"
 
     if not manifest_path.exists():
@@ -300,6 +352,7 @@ def main():
     for key, value in local_env.items():
         env.setdefault(key, value)
     env.update(collect_build_info(root_dir))
+    ensure_rust_target_available(resolved_target)
     run_cargo_build(root_dir, cargo_args, env)
 
     metadata = load_cargo_metadata(root_dir)

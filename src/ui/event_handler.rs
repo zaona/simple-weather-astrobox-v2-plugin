@@ -74,7 +74,7 @@ pub fn handle_timer_payload(payload: &str) {
 }
 
 pub fn ui_event_processor(
-    event_type: crate::exports::astrobox::psys_plugin::event::Event,
+    event_type: crate::exports::astrobox::psys_plugin::event_v3::Event,
     event_id: &str,
     event_payload: &str,
 ) {
