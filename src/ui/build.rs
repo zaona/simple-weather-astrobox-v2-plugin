@@ -164,13 +164,13 @@ fn build_settings_main(_state: &UiState) -> ui::Element {
         None,
     );
 
-    root.child(afd_card.margin_bottom(10))
-        .child(help_card.margin_bottom(10))
+    root.child(afd_card.margin_bottom(8))
+        .child(help_card.margin_bottom(8))
         .child(qq_card.margin_bottom(18))
         .child(build_title)
-        .child(build_time_row.margin_bottom(10))
-        .child(build_user_row.margin_bottom(10))
-        .child(build_branch_row.margin_bottom(10))
+        .child(build_time_row.margin_bottom(8))
+        .child(build_user_row.margin_bottom(8))
+        .child(build_branch_row.margin_bottom(8))
         .child(build_hash_row)
 }
 
@@ -196,7 +196,7 @@ fn build_sync_card_text() -> String {
 
     let expired_mark = if expired { " (已过期)" } else { "" };
     format!(
-        "上次同步\n地点: {}\n时间: {}{}",
+        "上次同步\n地区: {}\n时间: {}{}",
         location, time_text, expired_mark
     )
 }
@@ -300,16 +300,19 @@ fn build_value_text(value: &str) -> ui::Element {
 
 fn build_advanced_send_tab(state: &UiState) -> ui::Element {
     let search_label = ui::Element::new(ui::ElementType::P, Some("搜索城市"))
-        .size(16)
+        .size(15)
+        .margin_left(12)
         .margin_bottom(8);
 
     let search_input = ui::Element::new(ui::ElementType::Input, Some(&state.search_query))
         .on(ui::Event::Change, SEARCH_INPUT_CHANGE_EVENT)
         .on(ui::Event::Input, SEARCH_INPUT_SUBMIT_EVENT)
-        .radius(8)
+        .radius(18)
         .bg("#2A2A2A")
         .height(INPUT_HEIGHT)
         .width_full()
+        .padding_left(8)
+        .padding_right(8)
         .margin_right(8);
 
     let search_button = build_search_inline_button(SEARCH_BUTTON_EVENT);
@@ -319,18 +322,14 @@ fn build_advanced_send_tab(state: &UiState) -> ui::Element {
         .flex_direction(ui::FlexDirection::Row)
         .align_center()
         .width_full()
-        .margin_bottom(12)
+        .margin_bottom(8)
         .child(search_input)
         .child(search_button);
 
     let recent_container = build_recent_locations(state);
     let results_container = build_location_results(state);
 
-    let days_label = ui::Element::new(ui::ElementType::P, Some("同步天气天数"))
-        .size(16)
-        .margin_bottom(8);
-
-    let days_row = build_days_row(state);
+    let days_card = build_days_card(state).margin_top(10).margin_bottom(8);
 
     let hourly_card = build_settings_card(
         icons::hourly_sync_svg(),
@@ -342,14 +341,12 @@ fn build_advanced_send_tab(state: &UiState) -> ui::Element {
         )),
         None,
     )
-    .margin_top(12)
-    .margin_bottom(4);
+    .margin_bottom(18);
 
     let send_button =
         build_icon_text_button_full("同步数据", icons::send_tab_svg(), SEND_BUTTON_EVENT)
             .bg("#0090FF26")
-            .text_color("#0090FF")
-            .margin_top(16);
+            .text_color("#0090FF");
 
     let root = ui::Element::new(ui::ElementType::Div, None)
         .flex()
@@ -360,8 +357,7 @@ fn build_advanced_send_tab(state: &UiState) -> ui::Element {
         .child(search_row)
         .child(recent_container)
         .child(results_container)
-        .child(days_label)
-        .child(days_row)
+        .child(days_card)
         .child(hourly_card)
         .child(send_button)
 }
@@ -370,15 +366,15 @@ fn build_recent_locations(state: &UiState) -> ui::Element {
     let mut container = ui::Element::new(ui::ElementType::Div, None)
         .flex()
         .flex_direction(ui::FlexDirection::Column)
-        .width_full()
-        .margin_bottom(8);
+        .width_full();
 
     if state.recent_locations.is_empty() {
         return container;
     }
 
-    let label = ui::Element::new(ui::ElementType::P, Some("最近地点"))
+    let label = ui::Element::new(ui::ElementType::P, Some("最近地区"))
         .size(14)
+        .margin_left(12)
         .margin_bottom(8)
         .text_color("#BBBBBB");
     container = container.child(label);
@@ -427,8 +423,7 @@ fn build_location_results(state: &UiState) -> ui::Element {
     let mut container = ui::Element::new(ui::ElementType::Div, None)
         .flex()
         .flex_direction(ui::FlexDirection::Column)
-        .width_full()
-        .margin_bottom(16);
+        .width_full();
 
     if state.search_query.trim().is_empty() {
         return container;
@@ -442,8 +437,9 @@ fn build_location_results(state: &UiState) -> ui::Element {
         );
     }
 
-    let label = ui::Element::new(ui::ElementType::P, Some("具体地点"))
+    let label = ui::Element::new(ui::ElementType::P, Some("具体地区"))
         .size(14)
+        .margin_left(12)
         .margin_bottom(8)
         .text_color("#BBBBBB");
     container = container.child(label);
@@ -488,37 +484,31 @@ fn build_location_results(state: &UiState) -> ui::Element {
     container
 }
 
-fn build_days_row(state: &UiState) -> ui::Element {
+fn build_days_card(state: &UiState) -> ui::Element {
+    let selected_text = format!("{}天", state.selected_days);
     let options = [3u32, 7, 10, 15, 30];
-    let mut row = ui::Element::new(ui::ElementType::Div, None)
-        .flex()
-        .flex_direction(ui::FlexDirection::Row)
-        .width_full()
-        .margin_bottom(12);
 
-    for (i, day) in options.iter().enumerate() {
-        let is_active = *day == state.selected_days;
-        let text = ui::Element::new(ui::ElementType::Span, Some(&format!("{}天", day))).size(14);
+    let mut select = ui::Element::new(ui::ElementType::Select, Some(&selected_text))
+        .on(ui::Event::Change, DAYS_DROPDOWN_EVENT)
+        .radius(8)
+        .padding_left(12)
+        .padding_right(12)
+        .bg("#2A2A2A")
+        .size(14);
 
-        let btn = ui::Element::new(ui::ElementType::Button, None)
-            .without_default_styles()
-            .on(ui::Event::Click, &format!("{}{}", SELECT_DAYS_PREFIX, day))
-            .radius(999)
-            .padding_top(8)
-            .padding_bottom(8)
-            .padding_left(16)
-            .padding_right(16)
-            .bg(if is_active { "#2A2A2A" } else { "#1E1E1F" })
-            .text_color(if is_active { "#FFFFFF" } else { "#BBBBBB" })
-            .child(text);
-
-        row = row.child(btn);
-        if i < options.len() - 1 {
-            row = row.child(ui::Element::new(ui::ElementType::Span, None).width(6));
-        }
+    for day in options.iter() {
+        let option_text = format!("{}天", day);
+        let option = ui::Element::new(ui::ElementType::Option, Some(&option_text));
+        select = select.child(option);
     }
 
-    row
+    build_settings_card(
+        icons::calendar_svg(),
+        "同步天气天数",
+        None,
+        Some(select),
+        None,
+    )
 }
 
 pub fn rerender_main_ui() {
@@ -536,8 +526,8 @@ pub fn rerender_main_ui() {
 }
 
 const INPUT_HEIGHT: u32 = 40;
-const SWITCH_W: u32 = 42;
-const SWITCH_H: u32 = 24;
+const SWITCH_W: u32 = 35;
+const SWITCH_H: u32 = 20;
 
 fn build_switch(is_on: bool, event_id: &str) -> ui::Element {
     let svg = if is_on {
@@ -566,13 +556,13 @@ fn build_settings_card(
     click_event: Option<&str>,
 ) -> ui::Element {
     let icon = ui::Element::new(ui::ElementType::Svg, Some(&icon_svg))
-        .width(24)
-        .height(24)
+        .width(22)
+        .height(22)
         .text_color("#FFFFFF");
 
     let icon_wrap = ui::Element::new(ui::ElementType::Div, None)
-        .width(24)
-        .height(24)
+        .width(22)
+        .height(22)
         .flex()
         .align_center()
         .justify_center()
@@ -599,7 +589,7 @@ fn build_settings_card(
         .align_center()
         .width_full()
         .bg("#1E1E1F")
-        .radius(24)
+        .radius(18)
         .padding_left(12)
         .padding_right(12)
         .padding_top(10)
@@ -628,7 +618,7 @@ fn build_section_title(text: &str) -> ui::Element {
     ui::Element::new(ui::ElementType::P, Some(text))
         .size(13)
         .text_color("#888888")
-        .margin_left(15)
+        .margin_left(12)
         .margin_bottom(8)
 }
 
@@ -675,8 +665,8 @@ fn short_git_hash(hash: &str) -> String {
 
 fn build_icon_text_button_full(label: &str, icon_svg: String, event_id: &str) -> ui::Element {
     let icon = ui::Element::new(ui::ElementType::Svg, Some(&icon_svg))
-        .width(24)
-        .height(24);
+        .width(22)
+        .height(22);
 
     let text = ui::Element::new(ui::ElementType::Span, Some(label)).size(14);
 
@@ -690,7 +680,7 @@ fn build_icon_text_button_full(label: &str, icon_svg: String, event_id: &str) ->
         .flex()
         .align_center()
         .child(icon)
-        .child(ui::Element::new(ui::ElementType::Span, None).width(6))
+        .child(ui::Element::new(ui::ElementType::Span, None).width(8))
         .child(text)
 }
 
@@ -748,7 +738,7 @@ fn build_location_label(item: &LocationOption) -> String {
         if !item.lon.is_empty() && !item.lat.is_empty() {
             return format!("{}, {}", item.lon, item.lat);
         }
-        return "未知地点".to_string();
+        return "未知地区".to_string();
     }
     if item.adm1.is_empty() && item.adm2.is_empty() {
         item.name.clone()

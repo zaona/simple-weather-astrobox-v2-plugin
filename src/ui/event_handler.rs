@@ -22,7 +22,7 @@ pub const SEARCH_BUTTON_EVENT: &str = "search_button";
 pub const SEARCH_INPUT_SUBMIT_EVENT: &str = "search_input_submit";
 pub const SELECT_LOCATION_PREFIX: &str = "select_location:";
 pub const SELECT_RECENT_PREFIX: &str = "select_recent:";
-pub const SELECT_DAYS_PREFIX: &str = "select_days:";
+pub const DAYS_DROPDOWN_EVENT: &str = "days_dropdown";
 
 static LAST_READY_TS_MS: AtomicU64 = AtomicU64::new(0);
 static HANDSHAKE_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -165,6 +165,15 @@ pub fn ui_event_processor(
             search_locations();
         }
 
+        DAYS_DROPDOWN_EVENT => {
+            let parsed_value = parse_event_value(event_payload);
+            if let Some(day_str) = parsed_value.strip_suffix('天') {
+                if let Ok(day) = day_str.trim().parse::<u32>() {
+                    select_days(day);
+                }
+            }
+        }
+
         _ => {}
     }
 
@@ -179,13 +188,6 @@ pub fn ui_event_processor(
         if let Some(idx_str) = event_id.strip_prefix(SELECT_RECENT_PREFIX) {
             if let Ok(idx) = idx_str.parse::<usize>() {
                 select_recent_location(idx);
-            }
-        }
-    }
-    if event_id.starts_with(SELECT_DAYS_PREFIX) {
-        if let Some(day_str) = event_id.strip_prefix(SELECT_DAYS_PREFIX) {
-            if let Ok(day) = day_str.parse::<u32>() {
-                select_days(day);
             }
         }
     }
@@ -1188,7 +1190,7 @@ fn fetch_first_location(query: &str) -> Result<LocationOption, String> {
         .get("location")
         .and_then(|v| v.as_array())
         .and_then(|v| v.first())
-        .ok_or_else(|| "未找到匹配地点".to_string())?;
+        .ok_or_else(|| "未找到匹配地区".to_string())?;
 
     Ok(LocationOption {
         id: first
