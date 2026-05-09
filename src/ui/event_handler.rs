@@ -4,9 +4,6 @@ use crate::astrobox::psys_host::dialog;
 use crate::astrobox::psys_host::interconnect;
 use crate::astrobox::psys_host::register;
 use crate::astrobox::psys_host::thirdpartyapp;
-use crate::astrobox::psys_host::timer;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
 
@@ -25,52 +22,14 @@ pub const SELECT_LOCATION_PREFIX: &str = "select_location:";
 pub const SELECT_RECENT_PREFIX: &str = "select_recent:";
 pub const DAYS_DROPDOWN_EVENT: &str = "days_dropdown";
 
-static LAST_READY_TS_MS: AtomicU64 = AtomicU64::new(0);
-static HANDSHAKE_RUNNING: AtomicBool = AtomicBool::new(false);
-static PENDING_TIMER_ID: AtomicU64 = AtomicU64::new(0);
-const PENDING_SEND_TIMEOUT_MS: u64 = 1200;
 const WEATHER_SYNC_HOURLY_RANGE: &str = "168h";
 
-struct PendingSend {
-    device_addr: String,
-    device_name: String,
-    pkg_name: String,
-    data: String,
-}
-
-static PENDING_SEND: OnceLock<Mutex<Option<PendingSend>>> = OnceLock::new();
-
-fn pending_send() -> &'static Mutex<Option<PendingSend>> {
-    PENDING_SEND.get_or_init(|| Mutex::new(None))
-}
-
 pub fn handle_interconnect_message(payload: &str) {
-    tracing::info!("收到快应用消息");
-
-    let (addr, pkg, payload_text) = extract_interconnect_fields(payload);
-    tracing::info!(
-        "interconnect fields: addr={:?}, pkg={:?}, payload_text_len={}",
-        addr,
-        pkg,
-        payload_text.as_ref().map(|s| s.len()).unwrap_or(0)
-    );
-    let check_text = payload_text.as_deref().unwrap_or(payload);
-
-    if check_text.contains("ready") {
-        LAST_READY_TS_MS.store(now_ms(), Ordering::SeqCst);
-        tracing::info!("interconnect ready detected");
-
-        if let (Some(addr), Some(pkg)) = (addr, pkg) {
-            try_send_pending(addr, pkg);
-        }
-    }
+    tracing::info!("收到快应用消息: {}", payload);
 }
 
 pub fn handle_timer_payload(payload: &str) {
-    if payload == "pending_send_timeout" {
-        tracing::info!("pending_send_timeout fired, trying to send pending");
-        try_send_pending_any();
-    }
+    tracing::info!("timer payload: {}", payload);
 }
 
 pub fn ui_event_processor(
@@ -302,17 +261,18 @@ fn send_weather_data_advanced() {
         }
     };
 
+    let mut modules = serde_json::Map::new();
+    modules.insert("daily".to_string(), serde_json::Value::String(days_to_api_segment(days).to_string()));
+    if sync_hourly_enabled {
+        modules.insert("hourly".to_string(), serde_json::Value::String(WEATHER_SYNC_HOURLY_RANGE.to_string()));
+    }
+    if sync_alerts_enabled {
+        modules.insert("alerts".to_string(), serde_json::Value::Bool(true));
+    }
+
     let payload_json = serde_json::json!({
         "locationId": sync_location_id,
-        "modules": {
-            "daily": days_to_api_segment(days),
-            "hourly": if sync_hourly_enabled {
-                serde_json::Value::String(WEATHER_SYNC_HOURLY_RANGE.to_string())
-            } else {
-                serde_json::Value::Null
-            },
-            "alerts": sync_alerts_enabled
-        }
+        "modules": modules,
     });
 
     let recent_location = LocationOption {
@@ -340,19 +300,12 @@ fn send_weather_data_advanced() {
             mark_sync_started(&payload, &recent_location);
             wit_bindgen::block_on(async move {
                 match send_via_interconnect(&payload).await {
-                    Ok(SendOutcome::Sent) => {
+                    Ok(()) => {
                         record_recent_location(recent_location);
                         if selected_from_search {
                             clear_search_after_sync();
                         }
                         show_alert("成功", "发送成功");
-                    }
-                    Ok(SendOutcome::Pending) => {
-                        tracing::info!("send_via_interconnect pending; waiting for ready");
-                        record_recent_location(recent_location);
-                        if selected_from_search {
-                            clear_search_after_sync();
-                        }
                     }
                     Err(e) => show_alert("失败", &format!("发送失败: {}", e)),
                 }
@@ -431,12 +384,7 @@ fn days_to_api_segment(days: u32) -> &'static str {
     }
 }
 
-enum SendOutcome {
-    Sent,
-    Pending,
-}
-
-async fn send_via_interconnect(data: &str) -> Result<SendOutcome, String> {
+async fn send_via_interconnect(data: &str) -> Result<(), String> {
     tracing::info!("send_via_interconnect start");
 
     let devices = psys_host::device::get_connected_device_list().await;
@@ -479,47 +427,24 @@ async fn send_via_interconnect(data: &str) -> Result<SendOutcome, String> {
     if reg_result.is_err() {
         return Err("register_interconnect_recv failed".to_string());
     }
-    tracing::info!("register completed");
 
     tracing::info!("launching quick app before send...");
     ensure_quick_app_launched(&device_addr, pkg_name, "/index").await?;
 
-    let last_ready = LAST_READY_TS_MS.load(Ordering::SeqCst);
-    let now = now_ms();
-    if last_ready > 0 && now.saturating_sub(last_ready) <= 5000 {
-        let data_str = data.to_string();
-        tracing::info!("ready recently seen, sending immediately");
-        interconnect::send_qaic_message(&device_addr, pkg_name, &data_str)
-            .await
-            .map_err(|e| format!("{:?}", e))?;
-        tracing::info!("send_qaic_message completed");
-        let report_result = super::api_client::report_device(&device_addr, &device_name);
-        update_last_sync_from_data(&data_str);
-        if let Err(e) = report_result {
-            tracing::warn!("send success but api report failed: {}", e);
-        }
-        return Ok(SendOutcome::Sent);
+    tracing::info!("waiting 2s for quick app to be ready...");
+    std::thread::sleep(Duration::from_secs(2));
+
+    tracing::info!("sending weather data via interconnect");
+    interconnect::send_qaic_message(&device_addr, pkg_name, data)
+        .await
+        .map_err(|e| format!("{:?}", e))?;
+
+    let report_result = super::api_client::report_device(&device_addr, &device_name);
+    if let Err(e) = report_result {
+        tracing::warn!("send success but api report failed: {}", e);
     }
 
-    // Queue the payload and wait for ready via interconnect message callback.
-    {
-        let mut slot = pending_send()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *slot = Some(PendingSend {
-            device_addr: device_addr.clone(),
-            device_name: device_name.clone(),
-            pkg_name: pkg_name.to_string(),
-            data: data.to_string(),
-        });
-    }
-
-    schedule_pending_timeout().await;
-
-    tracing::info!("sending start message and waiting for ready...");
-    start_handshake_loop(device_addr.clone(), pkg_name.to_string());
-
-    Ok(SendOutcome::Pending)
+    Ok(())
 }
 
 fn now_ms() -> u64 {
@@ -529,247 +454,11 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn extract_interconnect_fields(payload: &str) -> (Option<String>, Option<String>, Option<String>) {
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(payload) {
-        let addr = json
-            .get("addr")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        let pkg = json
-            .get("pkgName")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        let payload_text = json
-            .get("payloadText")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        return (addr, pkg, payload_text);
-    }
-    (None, None, None)
-}
-
-fn update_last_sync_from_data(data: &str) {
-    let location_from_data = extract_location_from_payload(data);
-    let mut state = ui_state()
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    state.last_sync_time_ms = now_ms();
-
-    if let Some(loc) = location_from_data {
-        if !loc.is_empty() {
-            state.last_sync_location = loc;
-            drop(state);
-            crate::ui::render_sync_card(crate::ui::SYNC_CARD_ID);
-            return;
-        }
-    }
-
-    if !state.selected_location_name.is_empty() {
-        state.last_sync_location = state.selected_location_name.clone();
-    }
-    drop(state);
-    crate::ui::render_sync_card(crate::ui::SYNC_CARD_ID);
-}
-
 fn extract_location_from_payload(data: &str) -> Option<String> {
     let json = serde_json::from_str::<serde_json::Value>(data).ok()?;
     json.get("location")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-}
-
-fn try_send_pending(addr: String, pkg: String) {
-    tracing::info!("try_send_pending called: addr={}, pkg={}", addr, pkg);
-    let pending = {
-        let mut slot = pending_send()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        match slot.as_ref() {
-            Some(item) => {
-                tracing::info!(
-                    "pending slot exists: addr={}, pkg={}, data_len={}",
-                    item.device_addr,
-                    item.pkg_name,
-                    item.data.len()
-                );
-                if item.device_addr == addr && item.pkg_name == pkg {
-                    slot.take()
-                } else {
-                    tracing::warn!("pending slot mismatch, skip send");
-                    None
-                }
-            }
-            None => {
-                tracing::warn!("pending slot empty, nothing to send");
-                None
-            }
-        }
-    };
-
-    let Some(pending) = pending else {
-        return;
-    };
-
-    tracing::info!(
-        "sending pending payload: addr={}, pkg={}, data_len={}",
-        pending.device_addr,
-        pending.pkg_name,
-        pending.data.len()
-    );
-    wit_bindgen::block_on(async move {
-        clear_pending_timeout().await;
-        let send_result =
-            interconnect::send_qaic_message(&pending.device_addr, &pending.pkg_name, &pending.data)
-                .await;
-
-        match send_result {
-            Ok(_) => {
-                tracing::info!("pending send completed");
-                let report_result =
-                    super::api_client::report_device(&pending.device_addr, &pending.device_name);
-                record_recent_location_from_paste(&pending.data);
-                HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
-                update_last_sync_from_data(&pending.data);
-                if report_result.is_ok() {
-                    show_alert("成功", "发送成功");
-                } else {
-                    tracing::warn!(
-                        "send success but api report failed: {}",
-                        report_result
-                            .err()
-                            .unwrap_or_else(|| "未知错误".to_string())
-                    );
-                    show_alert("成功", "发送成功");
-                }
-            }
-            Err(e) => {
-                tracing::error!("pending send failed: {:?}", e);
-                HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
-                show_alert("失败", &format!("发送失败: {:?}", e));
-            }
-        }
-    });
-}
-
-fn try_send_pending_any() {
-    let pending = {
-        let mut slot = pending_send()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        slot.take()
-    };
-
-    let Some(pending) = pending else {
-        tracing::warn!("pending slot empty, nothing to send");
-        return;
-    };
-
-    tracing::info!(
-        "sending pending payload (timeout): addr={}, pkg={}, data_len={}",
-        pending.device_addr,
-        pending.pkg_name,
-        pending.data.len()
-    );
-
-    wit_bindgen::block_on(async move {
-        clear_pending_timeout().await;
-        let send_result =
-            interconnect::send_qaic_message(&pending.device_addr, &pending.pkg_name, &pending.data)
-                .await;
-
-        match send_result {
-            Ok(_) => {
-                tracing::info!("pending send completed (timeout)");
-                let report_result =
-                    super::api_client::report_device(&pending.device_addr, &pending.device_name);
-                record_recent_location_from_paste(&pending.data);
-                HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
-                update_last_sync_from_data(&pending.data);
-                if report_result.is_ok() {
-                    show_alert("成功", "发送成功");
-                } else {
-                    tracing::warn!(
-                        "send success but api report failed: {}",
-                        report_result
-                            .err()
-                            .unwrap_or_else(|| "未知错误".to_string())
-                    );
-                    show_alert("成功", "发送成功");
-                }
-            }
-            Err(e) => {
-                tracing::error!("pending send failed (timeout): {:?}", e);
-                HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
-                show_alert("失败", &format!("发送失败: {:?}", e));
-            }
-        }
-    });
-}
-
-async fn schedule_pending_timeout() {
-    clear_pending_timeout().await;
-    let timer_id = timer::set_timeout(1200, "pending_send_timeout").await;
-    if timer_id != 0 {
-        PENDING_TIMER_ID.store(timer_id, Ordering::SeqCst);
-    }
-}
-
-async fn clear_pending_timeout() {
-    let old = PENDING_TIMER_ID.swap(0, Ordering::SeqCst);
-    if old != 0 {
-        let _ = timer::clear_timer(old).await;
-    }
-}
-
-fn start_handshake_loop(device_addr: String, pkg_name: String) {
-    if HANDSHAKE_RUNNING.swap(true, Ordering::SeqCst) {
-        tracing::info!("handshake loop already running");
-        return;
-    }
-
-    wit_bindgen::spawn(async move {
-        let mut last_seen = LAST_READY_TS_MS.load(Ordering::SeqCst);
-        let start_ms = now_ms();
-        for attempt in 0..15 {
-            if !pending_exists() {
-                tracing::info!("pending already sent, stopping handshake loop");
-                HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
-                return;
-            }
-            tracing::info!("handshake attempt {}", attempt + 1);
-            let start_result =
-                interconnect::send_qaic_message(&device_addr, &pkg_name, "start").await;
-            tracing::info!("send start result: {:?}", start_result);
-
-            for _ in 0..12 {
-                let current = LAST_READY_TS_MS.load(Ordering::SeqCst);
-                if current > last_seen {
-                    tracing::info!("handshake ready received in loop");
-                    HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
-                    return;
-                }
-                last_seen = current;
-                std::thread::sleep(Duration::from_millis(50));
-                if now_ms().saturating_sub(start_ms) >= PENDING_SEND_TIMEOUT_MS && pending_exists()
-                {
-                    tracing::info!("pending timeout reached, sending without ready");
-                    HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
-                    try_send_pending_any();
-                    return;
-                }
-            }
-        }
-
-        tracing::warn!("handshake loop exhausted without ready");
-        HANDSHAKE_RUNNING.store(false, Ordering::SeqCst);
-    });
-}
-
-fn pending_exists() -> bool {
-    let slot = pending_send()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    slot.is_some()
 }
 
 async fn check_quick_app_installed(device_addr: &str, pkg_name: &str) -> Result<bool, String> {
@@ -1041,62 +730,6 @@ fn record_recent_location(location: LocationOption) {
     let _ = crate::ui::state::save_all_settings();
     resolve_recent_locations_if_needed();
     crate::ui::build::rerender_main_ui();
-}
-
-fn record_recent_location_from_paste(data: &str) {
-    let json = match serde_json::from_str::<serde_json::Value>(data) {
-        Ok(value) => value,
-        Err(_) => return,
-    };
-
-    let location_id = json
-        .get("locationId")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .or_else(|| {
-            let fxlink = json.get("fxLink").and_then(|v| v.as_str()).or_else(|| {
-                json.get("location")
-                    .and_then(|v| v.get("fxLink"))
-                    .and_then(|v| v.as_str())
-            });
-            fxlink.and_then(extract_location_id_from_fxlink)
-        })
-        .unwrap_or_default();
-    if location_id.is_empty() {
-        return;
-    }
-
-    let location_name = json
-        .get("location")
-        .and_then(|v| v.as_str())
-        .or_else(|| {
-            json.get("location")
-                .and_then(|v| v.get("name"))
-                .and_then(|v| v.as_str())
-        })
-        .unwrap_or("")
-        .to_string();
-
-    record_recent_location(LocationOption {
-        id: location_id,
-        name: location_name,
-        adm1: String::new(),
-        adm2: String::new(),
-        lat: String::new(),
-        lon: String::new(),
-    });
-}
-
-fn extract_location_id_from_fxlink(link: &str) -> Option<String> {
-    let end = link.rfind(".html")?;
-    let part = &link[..end];
-    let start = part.rfind('-')?;
-    let id = &part[start + 1..];
-    if id.chars().all(|c| c.is_ascii_digit()) && !id.is_empty() {
-        Some(id.to_string())
-    } else {
-        None
-    }
 }
 
 pub fn resolve_recent_locations_if_needed() {
