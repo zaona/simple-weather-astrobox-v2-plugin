@@ -196,7 +196,7 @@ fn build_sync_card_text() -> String {
 
     let expired_mark = if expired { " (已过期)" } else { "" };
     format!(
-        "上次同步\n地区: {}\n时间: {}{}",
+        "地区: {}\n时间: {}{}",
         location, time_text, expired_mark
     )
 }
