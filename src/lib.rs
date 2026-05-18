@@ -1,4 +1,3 @@
-use serde_json;
 use wit_bindgen::FutureReader;
 
 use crate::exports::astrobox::psys_plugin::{event_v3 as event, lifecycle};

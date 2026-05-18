@@ -218,11 +218,6 @@ fn extract_event_value(value: &serde_json::Value) -> Option<String> {
 }
 
 fn send_weather_data() {
-    tracing::info!("send_weather_data called");
-    send_weather_data_advanced();
-}
-
-fn send_weather_data_advanced() {
     let (
         location_id,
         location_name,
@@ -292,7 +287,7 @@ fn send_weather_data_advanced() {
         }
     };
 
-    match http_post_json(&sync_url, &payload_json) {
+    match super::api_client::post_json(&sync_url, &payload_json) {
         Ok(mut json) => {
             json["location"] = serde_json::Value::String(recent_location.name.clone());
             let payload = json.to_string();
@@ -400,7 +395,6 @@ async fn send_via_interconnect(data: &str) -> Result<(), String> {
     let first_device = devices.first().ok_or("没有连接的设备")?.clone();
     let device_addr = first_device.addr.clone();
 
-
     tracing::info!("using device: {}", device_addr);
 
     let pkg_name = "com.application.zaona.weather";
@@ -442,7 +436,7 @@ async fn send_via_interconnect(data: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn now_ms() -> u64 {
+pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -583,7 +577,7 @@ fn search_locations() {
         }
     };
 
-    match http_get_json(&url) {
+    match super::api_client::get_json(&url) {
         Ok(json) => {
             let mut results: Vec<LocationOption> = Vec::new();
             if let Some(list) = json.get("location").and_then(|v| v.as_array()) {
@@ -824,7 +818,7 @@ fn fetch_first_location(query: &str) -> Result<LocationOption, String> {
     let url = Url::parse_with_params(&base, &[("location", query)])
         .map_err(|e| format!("URL解析失败: {}", e))?
         .to_string();
-    let json = http_get_json(&url)?;
+    let json = super::api_client::get_json(&url)?;
     let first = json
         .get("location")
         .and_then(|v| v.as_array())
@@ -876,10 +870,3 @@ fn clear_search_after_sync() {
     crate::ui::build::rerender_main_ui();
 }
 
-fn http_get_json(url: &str) -> Result<serde_json::Value, String> {
-    super::api_client::get_json(url)
-}
-
-fn http_post_json(url: &str, payload: &serde_json::Value) -> Result<serde_json::Value, String> {
-    super::api_client::post_json(url, payload)
-}

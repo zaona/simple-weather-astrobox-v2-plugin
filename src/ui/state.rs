@@ -128,12 +128,6 @@ struct StoredApiSettings {
     selected_location_lon: String,
     #[serde(default)]
     recent_locations: Vec<LocationOption>,
-    #[serde(default)]
-    use_custom_api: bool,
-    #[serde(default)]
-    custom_api_host: String,
-    #[serde(default)]
-    custom_api_key: String,
 }
 
 pub fn load_api_settings_once() {
@@ -211,9 +205,6 @@ pub fn save_all_settings() -> Result<(), String> {
         selected_location_lat: state.selected_location_lat.clone(),
         selected_location_lon: state.selected_location_lon.clone(),
         recent_locations: state.recent_locations.clone(),
-        use_custom_api: false,
-        custom_api_host: String::new(),
-        custom_api_key: String::new(),
     };
 
     let content = serde_json::to_string_pretty(&stored).map_err(|e| e.to_string())?;

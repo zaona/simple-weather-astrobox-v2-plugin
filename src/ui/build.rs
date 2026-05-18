@@ -4,8 +4,6 @@ use super::icons;
 use super::state::*;
 use crate::astrobox::psys_host;
 use crate::astrobox::psys_host::ui_v3 as ui;
-use std::time::{SystemTime, UNIX_EPOCH};
-
 pub fn render_main_ui(element_id: &str) {
     {
         let mut state = ui_state()
@@ -216,13 +214,6 @@ fn format_relative(elapsed_ms: u64) -> String {
     }
     let days = hours / 24;
     format!("{}天前", days)
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
 }
 
 fn format_beijing_time(raw: &str) -> String {
