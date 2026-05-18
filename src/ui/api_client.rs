@@ -43,40 +43,6 @@ pub fn post_json(url: &str, payload: &serde_json::Value) -> Result<serde_json::V
     parse_http_json_response(status, response_body)
 }
 
-pub fn report_device(device_id: &str, device_name: &str) -> Result<(), String> {
-    let base = state::server_api_base()?;
-    let endpoint = format!("{}/api/device/report", base.trim_end_matches('/'));
-    let device_name = normalize_device_name(device_name)
-        .ok_or_else(|| "设备名称清洗后为空，已取消上报".to_string())?;
-    let payload = serde_json::json!({
-        "deviceId": device_id,
-        "deviceName": device_name,
-    });
-    let response = post_json(&endpoint, &payload)?;
-    if response.get("code").and_then(|v| v.as_str()) == Some("200") {
-        tracing::info!("device report ok: device_id={}", device_id);
-        Ok(())
-    } else {
-        Err(response
-            .get("message")
-            .and_then(|v| v.as_str())
-            .unwrap_or("设备上报失败")
-            .to_string())
-    }
-}
-
-fn normalize_device_name(device_name: &str) -> Option<String> {
-    let mut name = device_name.trim().to_string();
-
-    if let Some((prefix, suffix)) = name.rsplit_once(' ') {
-        if suffix.len() == 4 && suffix.chars().all(|c| c.is_ascii_alphanumeric()) {
-            name = prefix.trim_end().to_string();
-        }
-    }
-
-    if name.is_empty() { None } else { Some(name) }
-}
-
 fn parse_http_json_response(status: u16, body: Vec<u8>) -> Result<serde_json::Value, String> {
     let body = maybe_decompress(body)?;
     if body.is_empty() {

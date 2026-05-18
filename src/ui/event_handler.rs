@@ -399,7 +399,7 @@ async fn send_via_interconnect(data: &str) -> Result<(), String> {
 
     let first_device = devices.first().ok_or("没有连接的设备")?.clone();
     let device_addr = first_device.addr.clone();
-    let device_name = first_device.name.clone();
+
 
     tracing::info!("using device: {}", device_addr);
 
@@ -438,11 +438,6 @@ async fn send_via_interconnect(data: &str) -> Result<(), String> {
     interconnect::send_qaic_message(&device_addr, pkg_name, data)
         .await
         .map_err(|e| format!("{:?}", e))?;
-
-    let report_result = super::api_client::report_device(&device_addr, &device_name);
-    if let Err(e) = report_result {
-        tracing::warn!("send success but api report failed: {}", e);
-    }
 
     Ok(())
 }
