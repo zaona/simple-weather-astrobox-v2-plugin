@@ -504,7 +504,7 @@ async fn ensure_quick_app_launched(
 
 fn open_help_doc_page() {
     tracing::info!("open_help_doc_page called");
-    let url = "https://www.yuque.com/zaona/weather";
+    let url = "https://weather.zaona.top/";
     dialog::open_url(url);
     tracing::info!("opened help doc page: {}", url);
 }
