@@ -290,37 +290,19 @@ fn build_value_text(value: &str) -> ui::Element {
 }
 
 fn build_advanced_send_tab(state: &UiState) -> ui::Element {
-    let search_label = ui::Element::new(ui::ElementType::P, Some("搜索城市"))
-        .size(15)
-        .margin_left(12);
-
-    let search_input = ui::Element::new(ui::ElementType::Input, Some(&state.search_query))
-        .on(ui::Event::Change, SEARCH_INPUT_CHANGE_EVENT)
-        .on(ui::Event::Input, SEARCH_INPUT_SUBMIT_EVENT)
-        .radius(18)
-        .bg("#2A2A2A")
-        .height(INPUT_HEIGHT)
-        .width_full()
-        .padding_left(8)
-        .padding_right(8);
-
-    let search_button = build_search_inline_button(SEARCH_BUTTON_EVENT);
-
-    let search_row = ui::Element::new(ui::ElementType::Div, None)
+    let root = ui::Element::new(ui::ElementType::Div, None)
         .flex()
-        .flex_direction(ui::FlexDirection::Row)
-        .align_center()
+        .flex_direction(ui::FlexDirection::Column)
         .width_full()
-        .gap(8)
-        .child(search_input)
-        .child(search_button);
+        .gap(8);
 
-    let has_recent = !state.recent_locations.is_empty();
-    let has_search = !state.search_query.trim().is_empty();
-    let recent_container = build_recent_locations(state);
-    let results_container = build_location_results(state);
+    if state.show_location_picker {
+        return root.child(build_location_picker(state));
+    }
 
-    let days_card = build_days_card(state).margin_top(10);
+    let location_card = build_location_setting_card(state);
+
+    let days_card = build_days_card(state);
 
     let hourly_card = build_settings_card(
         icons::hourly_sync_svg(),
@@ -350,49 +332,141 @@ fn build_advanced_send_tab(state: &UiState) -> ui::Element {
             .bg("#0090FF26")
             .text_color("#0090FF");
 
-    let mut root = ui::Element::new(ui::ElementType::Div, None)
-        .flex()
-        .flex_direction(ui::FlexDirection::Column)
-        .width_full()
-        .gap(8);
-
-    root = root.child(search_label).child(search_row);
-    if has_recent {
-        root = root.child(recent_container);
-    }
-    if has_search {
-        root = root.child(results_container);
-    }
-    root.child(days_card)
+    root.child(location_card)
+        .child(days_card)
         .child(hourly_card)
         .child(alerts_card)
         .child(send_button)
 }
 
-fn build_recent_locations(state: &UiState) -> ui::Element {
-    if state.recent_locations.is_empty() {
-        return ui::Element::new(ui::ElementType::Div, None);
+fn build_location_picker(state: &UiState) -> ui::Element {
+    // Top bar: back button + title
+    let back_btn = ui::Element::new(ui::ElementType::Button, None)
+        .without_default_styles()
+        .on(ui::Event::Click, CLOSE_LOCATION_PICKER_EVENT)
+        .width(36)
+        .height(36)
+        .radius(999)
+        .bg("#2A2A2A")
+        .flex()
+        .align_center()
+        .justify_center()
+        .child(
+            ui::Element::new(ui::ElementType::Svg, Some(&icons::back_arrow_svg()))
+                .width(20)
+                .height(20),
+        );
+
+    let picker_title = ui::Element::new(ui::ElementType::P, Some("位置设置"))
+        .size(17);
+
+    let top_bar = ui::Element::new(ui::ElementType::Div, None)
+        .flex()
+        .flex_direction(ui::FlexDirection::Row)
+        .align_center()
+        .gap(8)
+        .margin_bottom(8)
+        .child(back_btn)
+        .child(picker_title);
+
+    // Search bar
+    let search_input = ui::Element::new(ui::ElementType::Input, Some(&state.search_query))
+        .on(ui::Event::Change, SEARCH_INPUT_CHANGE_EVENT)
+        .on(ui::Event::Input, SEARCH_INPUT_SUBMIT_EVENT)
+        .radius(18)
+        .bg("#2A2A2A")
+        .height(INPUT_HEIGHT)
+        .flex_grow(1.0)
+        .padding_left(8)
+        .padding_right(8);
+
+    let search_button = build_search_inline_button(SEARCH_BUTTON_EVENT);
+
+    let has_query = !state.search_query.trim().is_empty();
+    let mut search_row = ui::Element::new(ui::ElementType::Div, None)
+        .flex()
+        .flex_direction(ui::FlexDirection::Row)
+        .align_center()
+        .width_full()
+        .gap(8)
+        .child(search_input)
+        .child(search_button);
+
+    if has_query {
+        let cancel_btn = build_cancel_search_button();
+        search_row = search_row.child(cancel_btn);
     }
 
-    let mut grid = ui::Element::new(ui::ElementType::Grid, None)
-        .grid_template_columns("1fr 1fr 1fr")
+    // Results or history (not both)
+    let has_search = !state.search_query.trim().is_empty();
+    let results_container = build_location_results(state);
+    let recent_list = build_recent_locations_list(state);
+    let has_recent = !state.recent_locations.is_empty();
+
+    let mut root = ui::Element::new(ui::ElementType::Div, None)
+        .flex()
+        .flex_direction(ui::FlexDirection::Column)
+        .width_full()
         .gap(8)
-        .width_full();
+        .child(top_bar)
+        .child(search_row);
+
+    if has_search {
+        root = root.child(results_container);
+    } else if has_recent {
+        let history_title = ui::Element::new(ui::ElementType::P, Some("位置历史"))
+            .size(13)
+            .text_color("#888888")
+            .margin_left(12)
+            .margin_top(10);
+        root = root.child(history_title).child(recent_list);
+    }
+
+    root
+}
+
+fn build_location_setting_card(state: &UiState) -> ui::Element {
+    let display_name = state
+        .selected_location
+        .as_ref()
+        .map(|l| l.to_display_name())
+        .unwrap_or_else(|| "未设置".to_string());
+
+    let arrow = ui::Element::new(ui::ElementType::Svg, Some(&icons::chevron_right_svg()))
+        .width(18)
+        .height(18)
+        .text_color("#888888");
+
+    build_settings_card(
+        icons::location_map_svg(),
+        "位置设置",
+        Some(&display_name),
+        Some(arrow),
+        Some(OPEN_LOCATION_PICKER_EVENT),
+    )
+}
+
+fn build_recent_locations_list(state: &UiState) -> ui::Element {
+    let mut list = ui::Element::new(ui::ElementType::Div, None)
+        .flex()
+        .flex_direction(ui::FlexDirection::Column)
+        .width_full()
+        .bg("#1E1E1F")
+        .radius(18)
+        .padding_left(12)
+        .padding_right(12)
+        .padding_top(4)
+        .padding_bottom(4);
 
     for (idx, item) in state.recent_locations.iter().enumerate() {
-        let label = build_location_label(item);
-        let is_selected = item.id == state.selected_location_id;
-        let pin_svg = if is_selected { icons::location_pin_filled_svg() } else { icons::location_pin_svg() };
-        let btn = build_location_chip(
-            &label,
-            pin_svg,
+        let item_el = build_location_list_item(
+            item,
             &format!("{}{}", SELECT_RECENT_PREFIX, idx),
-            is_selected,
         );
-        grid = grid.child(btn);
+        list = list.child(item_el);
     }
 
-    grid
+    list
 }
 
 fn build_location_results(state: &UiState) -> ui::Element {
@@ -406,25 +480,26 @@ fn build_location_results(state: &UiState) -> ui::Element {
             .text_color("#888888");
     }
 
-    let mut grid = ui::Element::new(ui::ElementType::Grid, None)
-        .grid_template_columns("1fr 1fr 1fr")
-        .gap(8)
-        .width_full();
+    let mut list = ui::Element::new(ui::ElementType::Div, None)
+        .flex()
+        .flex_direction(ui::FlexDirection::Column)
+        .width_full()
+        .bg("#1E1E1F")
+        .radius(18)
+        .padding_left(12)
+        .padding_right(12)
+        .padding_top(4)
+        .padding_bottom(4);
 
     for (idx, item) in state.search_results.iter().enumerate() {
-        let label = build_location_label(item);
-        let is_selected = item.id == state.selected_location_id;
-        let pin_svg = if is_selected { icons::location_pin_filled_svg() } else { icons::location_pin_svg() };
-        let btn = build_location_chip(
-            &label,
-            pin_svg,
+        let item_el = build_location_list_item(
+            item,
             &format!("{}{}", SELECT_LOCATION_PREFIX, idx),
-            is_selected,
         );
-        grid = grid.child(btn);
+        list = list.child(item_el);
     }
 
-    grid
+    list
 }
 
 fn build_days_card(state: &UiState) -> ui::Element {
@@ -631,47 +706,63 @@ fn build_search_inline_button(event_id: &str) -> ui::Element {
         .child(icon)
 }
 
-fn build_location_chip(
-    label: &str,
-    icon_svg: String,
-    event_id: &str,
-    selected: bool,
-) -> ui::Element {
-    let icon = ui::Element::new(ui::ElementType::Svg, Some(&icon_svg))
-        .width(16)
-        .height(16);
-
-    let text = ui::Element::new(ui::ElementType::Span, Some(label)).size(14);
-
+fn build_cancel_search_button() -> ui::Element {
     ui::Element::new(ui::ElementType::Button, None)
         .without_default_styles()
-        .on(ui::Event::Click, event_id)
+        .on(ui::Event::Click, CANCEL_SEARCH_EVENT)
         .radius(18)
-        .padding_top(8)
-        .padding_bottom(8)
-        .padding_left(12)
-        .padding_right(12)
-        .bg(if selected { "#0090FF26" } else { "#1E1E1F" })
-        .text_color(if selected { "#0090FF" } else { "#FFFFFF" })
+        .height(INPUT_HEIGHT)
+        .padding_left(10)
+        .padding_right(10)
+        .bg("#2A2A2A")
+        .text_color("#0090FF")
+        .size(14)
         .flex()
         .align_center()
-        .gap(6)
-        .child(icon)
-        .child(text)
+        .justify_center()
+        .child(ui::Element::new(ui::ElementType::Span, Some("取消")).size(14))
 }
 
-fn build_location_label(item: &LocationOption) -> String {
-    if item.name.trim().is_empty() {
-        if !item.lon.is_empty() && !item.lat.is_empty() {
-            return format!("{}, {}", item.lon, item.lat);
-        }
-        return "未知地区".to_string();
-    }
-    if item.adm1.is_empty() && item.adm2.is_empty() {
-        item.name.clone()
-    } else {
-        format!("{} · {} {}", item.name, item.adm1, item.adm2)
-            .trim()
-            .to_string()
-    }
+fn build_location_list_item(
+    location: &CityLocation,
+    event_id: &str,
+) -> ui::Element {
+    let icon = ui::Element::new(ui::ElementType::Svg, Some(&icons::location_pin_svg()))
+        .width(20)
+        .height(20)
+        .text_color("#FFFFFF");
+
+    let icon_wrap = ui::Element::new(ui::ElementType::Div, None)
+        .width(20)
+        .height(20)
+        .flex()
+        .align_center()
+        .justify_center()
+        .child(icon);
+
+    let title = ui::Element::new(ui::ElementType::P, Some(&location.name)).size(15);
+
+    let summary_text = format!("{} - {}", location.adm1, location.adm2);
+    let summary = ui::Element::new(ui::ElementType::P, Some(&summary_text))
+        .size(13)
+        .text_color("#888888");
+
+    let text_col = ui::Element::new(ui::ElementType::Div, None)
+        .flex()
+        .flex_direction(ui::FlexDirection::Column)
+        .width_full()
+        .child(title)
+        .child(summary);
+
+    ui::Element::new(ui::ElementType::Div, None)
+        .flex()
+        .flex_direction(ui::FlexDirection::Row)
+        .align_center()
+        .width_full()
+        .padding_top(10)
+        .padding_bottom(10)
+        .gap(10)
+        .child(icon_wrap)
+        .child(text_col)
+        .on(ui::Event::Click, event_id)
 }

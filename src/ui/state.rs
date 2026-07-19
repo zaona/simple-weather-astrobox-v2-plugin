@@ -18,16 +18,12 @@ pub struct UiState {
     pub sync_alerts_enabled: bool,
     pub selected_days: u32,
     pub search_query: String,
-    pub search_results: Vec<LocationOption>,
-    pub selected_location_id: String,
-    pub selected_location_name: String,
-    pub selected_location_adm1: String,
-    pub selected_location_adm2: String,
-    pub selected_location_lat: String,
-    pub selected_location_lon: String,
+    pub search_results: Vec<CityLocation>,
+    pub selected_location: Option<CityLocation>,
     pub selected_from_search: bool,
     pub recent_resolving: bool,
-    pub recent_locations: Vec<LocationOption>,
+    pub recent_locations: Vec<CityLocation>,
+    pub show_location_picker: bool,
     pub last_sync_time_ms: u64,
     pub last_sync_location: String,
 }
@@ -66,15 +62,35 @@ pub enum MainTab {
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct LocationOption {
+pub struct CityLocation {
     pub id: String,
     pub name: String,
     pub adm1: String,
     pub adm2: String,
-    #[serde(default)]
-    pub lat: String,
-    #[serde(default)]
-    pub lon: String,
+}
+
+impl CityLocation {
+    /// 显示名称，对齐 syncer-ng 的 `CityLocation.toString()`: "北京 (北京市 - 北京)"
+    pub fn to_display_name(&self) -> String {
+        if self.name.trim().is_empty() {
+            return "未知地区".to_string();
+        }
+        if self.adm1.is_empty() && self.adm2.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{} ({} - {})", self.name, self.adm1, self.adm2)
+                .trim()
+                .to_string()
+        }
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
+    pub fn from_json(json: &str) -> Option<Self> {
+        serde_json::from_str(json).ok()
+    }
 }
 
 static UI_STATE: OnceLock<RwLock<UiState>> = OnceLock::new();
@@ -90,15 +106,11 @@ pub fn ui_state() -> &'static RwLock<UiState> {
             selected_days: 7,
             search_query: String::new(),
             search_results: Vec::new(),
-            selected_location_id: String::new(),
-            selected_location_name: String::new(),
-            selected_location_adm1: String::new(),
-            selected_location_adm2: String::new(),
-            selected_location_lat: String::new(),
-            selected_location_lon: String::new(),
+            selected_location: None,
             selected_from_search: false,
             recent_resolving: false,
             recent_locations: Vec::new(),
+            show_location_picker: false,
             last_sync_time_ms: 0,
             last_sync_location: String::new(),
         };
@@ -115,19 +127,11 @@ struct StoredApiSettings {
     #[serde(default)]
     selected_days: u32,
     #[serde(default)]
-    selected_location_id: String,
-    #[serde(default)]
     selected_location_name: String,
     #[serde(default)]
-    selected_location_adm1: String,
+    selected_location_json: String,
     #[serde(default)]
-    selected_location_adm2: String,
-    #[serde(default)]
-    selected_location_lat: String,
-    #[serde(default)]
-    selected_location_lon: String,
-    #[serde(default)]
-    recent_locations: Vec<LocationOption>,
+    recent_locations: Vec<CityLocation>,
 }
 
 pub fn load_api_settings_once() {
@@ -160,22 +164,13 @@ pub fn load_api_settings_once() {
                 } else {
                     stored.selected_days
                 };
-                state.selected_location_id = stored.selected_location_id;
-                state.selected_location_name = stored.selected_location_name;
-                state.selected_location_adm1 = stored.selected_location_adm1;
-                state.selected_location_adm2 = stored.selected_location_adm2;
-                state.selected_location_lat = stored.selected_location_lat;
-                state.selected_location_lon = stored.selected_location_lon;
+                state.selected_location =
+                    CityLocation::from_json(&stored.selected_location_json);
                 state.recent_locations = stored.recent_locations;
-                if state.selected_location_id.is_empty() {
+                if state.selected_location.is_none() {
                     let first = state.recent_locations.first().cloned();
                     if let Some(first) = first {
-                        state.selected_location_id = first.id;
-                        state.selected_location_name = first.name;
-                        state.selected_location_adm1 = first.adm1;
-                        state.selected_location_adm2 = first.adm2;
-                        state.selected_location_lat = first.lat;
-                        state.selected_location_lon = first.lon;
+                        state.selected_location = Some(first);
                     }
                 }
                 info!("loaded api settings from disk");
@@ -198,12 +193,16 @@ pub fn save_all_settings() -> Result<(), String> {
         sync_hourly_enabled: state.sync_hourly_enabled,
         sync_alerts_enabled: state.sync_alerts_enabled,
         selected_days: state.selected_days,
-        selected_location_id: state.selected_location_id.clone(),
-        selected_location_name: state.selected_location_name.clone(),
-        selected_location_adm1: state.selected_location_adm1.clone(),
-        selected_location_adm2: state.selected_location_adm2.clone(),
-        selected_location_lat: state.selected_location_lat.clone(),
-        selected_location_lon: state.selected_location_lon.clone(),
+        selected_location_name: state
+            .selected_location
+            .as_ref()
+            .map(|l| l.to_display_name())
+            .unwrap_or_default(),
+        selected_location_json: state
+            .selected_location
+            .as_ref()
+            .map(|l| l.to_json())
+            .unwrap_or_default(),
         recent_locations: state.recent_locations.clone(),
     };
 

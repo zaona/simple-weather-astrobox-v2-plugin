@@ -17,6 +17,9 @@ pub const OPEN_QQ_GROUP_EVENT: &str = "open_qq_group";
 pub const OPEN_AFD_EVENT: &str = "open_afd";
 pub const SEARCH_INPUT_CHANGE_EVENT: &str = "search_input_change";
 pub const SEARCH_BUTTON_EVENT: &str = "search_button";
+pub const CANCEL_SEARCH_EVENT: &str = "cancel_search";
+pub const OPEN_LOCATION_PICKER_EVENT: &str = "open_location_picker";
+pub const CLOSE_LOCATION_PICKER_EVENT: &str = "close_location_picker";
 pub const SEARCH_INPUT_SUBMIT_EVENT: &str = "search_input_submit";
 pub const SELECT_LOCATION_PREFIX: &str = "select_location:";
 pub const SELECT_RECENT_PREFIX: &str = "select_recent:";
@@ -131,6 +134,35 @@ pub fn ui_event_processor(
         SEARCH_BUTTON_EVENT => {
             search_locations();
         }
+        CANCEL_SEARCH_EVENT => {
+            let mut state = ui_state()
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.search_query.clear();
+            state.search_results.clear();
+            drop(state);
+            crate::ui::build::rerender_main_ui();
+        }
+        OPEN_LOCATION_PICKER_EVENT => {
+            {
+                let mut state = ui_state()
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.show_location_picker = true;
+            }
+            crate::ui::build::rerender_main_ui();
+        }
+        CLOSE_LOCATION_PICKER_EVENT => {
+            {
+                let mut state = ui_state()
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.show_location_picker = false;
+                state.search_query.clear();
+                state.search_results.clear();
+            }
+            crate::ui::build::rerender_main_ui();
+        }
 
         DAYS_DROPDOWN_EVENT => {
             let parsed_value = parse_event_value(event_payload);
@@ -218,28 +250,12 @@ fn extract_event_value(value: &serde_json::Value) -> Option<String> {
 }
 
 fn send_weather_data() {
-    let (
-        location_id,
-        location_name,
-        location_adm1,
-        location_adm2,
-        location_lat,
-        location_lon,
-        days,
-        sync_hourly_enabled,
-        sync_alerts_enabled,
-        selected_from_search,
-    ) = {
+    let (location, days, sync_hourly_enabled, sync_alerts_enabled, selected_from_search) = {
         let state = ui_state()
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         (
-            state.selected_location_id.clone(),
-            state.selected_location_name.clone(),
-            state.selected_location_adm1.clone(),
-            state.selected_location_adm2.clone(),
-            state.selected_location_lat.clone(),
-            state.selected_location_lon.clone(),
+            state.selected_location.clone(),
             state.selected_days,
             state.sync_hourly_enabled,
             state.sync_alerts_enabled,
@@ -247,8 +263,15 @@ fn send_weather_data() {
         )
     };
 
-    let sync_location_id = match ensure_sync_location_id(&location_id, &location_lat, &location_lon)
-    {
+    let location = match location {
+        Some(loc) => loc,
+        None => {
+            show_alert("提示", "请先选择位置");
+            return;
+        }
+    };
+
+    let sync_location_id = match ensure_sync_location_id(&location.id) {
         Ok(value) => value,
         Err(message) => {
             show_alert("提示", &message);
@@ -270,15 +293,6 @@ fn send_weather_data() {
         "modules": modules,
     });
 
-    let recent_location = LocationOption {
-        id: sync_location_id,
-        name: location_name,
-        adm1: location_adm1,
-        adm2: location_adm2,
-        lat: location_lat,
-        lon: location_lon,
-    };
-
     let sync_url = match api_url("/api/weather/sync") {
         Ok(url) => url,
         Err(e) => {
@@ -289,14 +303,13 @@ fn send_weather_data() {
 
     match super::api_client::post_json(&sync_url, &payload_json) {
         Ok(mut json) => {
-            json["location"] = serde_json::Value::String(recent_location.name.clone());
+            json["location"] = serde_json::Value::String(location.name.clone());
             let payload = json.to_string();
-            let recent_location = recent_location.clone();
-            mark_sync_started(&payload, &recent_location);
+            let location_for_sync = location.clone();
+            mark_sync_started(&payload, &location_for_sync);
             wit_bindgen::block_on(async move {
                 match send_via_interconnect(&payload).await {
                     Ok(()) => {
-                        record_recent_location(recent_location);
                         if selected_from_search {
                             clear_search_after_sync();
                         }
@@ -312,7 +325,7 @@ fn send_weather_data() {
     }
 }
 
-fn mark_sync_started(payload: &str, location: &LocationOption) {
+fn mark_sync_started(payload: &str, location: &CityLocation) {
     let location_name = if !location.name.trim().is_empty() {
         location.name.trim().to_string()
     } else {
@@ -330,30 +343,21 @@ fn mark_sync_started(payload: &str, location: &LocationOption) {
     crate::ui::render_sync_card(crate::ui::SYNC_CARD_ID);
 }
 
-fn ensure_sync_location_id(
-    location_id: &str,
-    location_lat: &str,
-    location_lon: &str,
-) -> Result<String, String> {
+fn ensure_sync_location_id(location_id: &str) -> Result<String, String> {
     let trimmed_id = location_id.trim();
     if !trimmed_id.is_empty() && !trimmed_id.contains(',') {
         return Ok(trimmed_id.to_string());
     }
 
-    let lookup = if !location_lat.trim().is_empty() && !location_lon.trim().is_empty() {
-        format!("{},{}", location_lat.trim(), location_lon.trim())
-    } else if trimmed_id.contains(',') {
-        trimmed_id.to_string()
-    } else {
-        return Err("请先选择位置".to_string());
-    };
-
-    let location = fetch_first_location(&lookup)?;
-    if location.id.trim().is_empty() {
-        return Err("位置解析失败".to_string());
+    if trimmed_id.contains(',') {
+        let location = fetch_first_location(trimmed_id)?;
+        if location.id.trim().is_empty() {
+            return Err("位置解析失败".to_string());
+        }
+        return Ok(location.id);
     }
 
-    Ok(location.id)
+    Err("请先选择位置".to_string())
 }
 
 fn api_url(path: &str) -> Result<String, String> {
@@ -579,7 +583,7 @@ fn search_locations() {
 
     match super::api_client::get_json(&url) {
         Ok(json) => {
-            let mut results: Vec<LocationOption> = Vec::new();
+            let mut results: Vec<CityLocation> = Vec::new();
             if let Some(list) = json.get("location").and_then(|v| v.as_array()) {
                 for item in list {
                     let id = item
@@ -602,29 +606,12 @@ fn search_locations() {
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
-                    let lat = item
-                        .get("lat")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let lon = item
-                        .get("lon")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    if !id.is_empty() || (!lat.is_empty() && !lon.is_empty()) {
-                        let normalized_id = if id.is_empty() {
-                            format!("{},{}", lon, lat)
-                        } else {
-                            id
-                        };
-                        results.push(LocationOption {
-                            id: normalized_id,
+                    if !id.is_empty() {
+                        results.push(CityLocation {
+                            id,
                             name,
                             adm1,
                             adm2,
-                            lat,
-                            lon,
                         });
                     }
                 }
@@ -644,45 +631,55 @@ fn search_locations() {
 }
 
 fn select_location(idx: usize) {
-    let mut state = ui_state()
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let picked = state.search_results.get(idx).cloned();
-    if let Some(item) = &picked {
-        state.selected_location_id = item.id.clone();
-        state.selected_location_name = item.name.clone();
-        state.selected_location_adm1 = item.adm1.clone();
-        state.selected_location_adm2 = item.adm2.clone();
-        state.selected_location_lat = item.lat.clone();
-        state.selected_location_lon = item.lon.clone();
-        state.selected_days = 7;
-        state.selected_from_search = true;
+    let picked = {
+        let state = ui_state()
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.search_results.get(idx).cloned()
+    };
+
+    if let Some(item) = picked {
+        add_to_recent(item.clone());
+        {
+            let mut state = ui_state()
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.selected_location = Some(item);
+            state.selected_days = 7;
+            state.selected_from_search = true;
+            state.show_location_picker = false;
+            state.search_query.clear();
+            state.search_results.clear();
+        }
+        let _ = crate::ui::state::save_all_settings();
+        crate::ui::build::rerender_main_ui();
     }
-    drop(state);
-    let _ = crate::ui::state::save_all_settings();
-    crate::ui::build::rerender_main_ui();
 }
 
 fn select_recent_location(idx: usize) {
-    let _picked = {
-        let mut state = ui_state()
-            .write()
+    let picked = {
+        let state = ui_state()
+            .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let picked = state.recent_locations.get(idx).cloned();
-        if let Some(item) = &picked {
-            state.selected_location_id = item.id.clone();
-            state.selected_location_name = item.name.clone();
-            state.selected_location_adm1 = item.adm1.clone();
-            state.selected_location_adm2 = item.adm2.clone();
-            state.selected_location_lat = item.lat.clone();
-            state.selected_location_lon = item.lon.clone();
+        state.recent_locations.get(idx).cloned()
+    };
+
+    if let Some(item) = picked {
+        add_to_recent(item.clone());
+        {
+            let mut state = ui_state()
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.selected_location = Some(item);
             state.selected_days = 7;
             state.selected_from_search = false;
+            state.show_location_picker = false;
+            state.search_query.clear();
+            state.search_results.clear();
         }
-        picked
-    };
-    let _ = crate::ui::state::save_all_settings();
-    crate::ui::build::rerender_main_ui();
+        let _ = crate::ui::state::save_all_settings();
+        crate::ui::build::rerender_main_ui();
+    }
 }
 
 fn select_days(day: u32) {
@@ -698,18 +695,12 @@ fn select_days(day: u32) {
     crate::ui::build::rerender_main_ui();
 }
 
-fn record_recent_location(location: LocationOption) {
-    const MAX_RECENT: usize = 5;
+/// 对齐 syncer-ng 的 `addToRecentSearches()`: 去重 → 插入头部 → 截断到 MAX_RECENT
+fn add_to_recent(location: CityLocation) {
+    const MAX_RECENT: usize = 10;
     let mut state = ui_state()
         .write()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    state.selected_location_id = location.id.clone();
-    state.selected_location_name = location.name.clone();
-    state.selected_location_adm1 = location.adm1.clone();
-    state.selected_location_adm2 = location.adm2.clone();
-    state.selected_location_lat = location.lat.clone();
-    state.selected_location_lon = location.lon.clone();
-
     state.recent_locations.retain(|item| item.id != location.id);
     state.recent_locations.insert(0, location);
     if state.recent_locations.len() > MAX_RECENT {
@@ -718,7 +709,6 @@ fn record_recent_location(location: LocationOption) {
     drop(state);
     let _ = crate::ui::state::save_all_settings();
     resolve_recent_locations_if_needed();
-    crate::ui::build::rerender_main_ui();
 }
 
 pub fn resolve_recent_locations_if_needed() {
@@ -728,7 +718,11 @@ pub fn resolve_recent_locations_if_needed() {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         (
             state.recent_locations.clone(),
-            state.selected_location_id.clone(),
+            state
+                .selected_location
+                .as_ref()
+                .map(|l| l.id.clone())
+                .unwrap_or_default(),
             state.recent_resolving,
             state.current_tab,
         )
@@ -741,7 +735,7 @@ pub fn resolve_recent_locations_if_needed() {
         return;
     }
 
-    let pending: Vec<LocationOption> = recent
+    let pending: Vec<CityLocation> = recent
         .into_iter()
         .filter(|item| {
             !item.id.trim().is_empty()
@@ -761,7 +755,7 @@ pub fn resolve_recent_locations_if_needed() {
         state.recent_resolving = true;
     }
 
-    let mut updates: Vec<(String, LocationOption)> = Vec::new();
+    let mut updates: Vec<(String, CityLocation)> = Vec::new();
     for item in pending {
         let query_id = item.id.clone();
         if let Ok(update) = fetch_first_location(&query_id) {
@@ -791,20 +785,13 @@ pub fn resolve_recent_locations_if_needed() {
                 item.name = update.name.clone();
                 item.adm1 = update.adm1.clone();
                 item.adm2 = update.adm2.clone();
-                item.lat = update.lat.clone();
-                item.lon = update.lon.clone();
             }
         }
         if let Some((_query_id, update)) = updates
             .iter()
             .find(|(query_id, item)| item.id == selected_id || *query_id == selected_id)
         {
-            state.selected_location_id = update.id.clone();
-            state.selected_location_name = update.name.clone();
-            state.selected_location_adm1 = update.adm1.clone();
-            state.selected_location_adm2 = update.adm2.clone();
-            state.selected_location_lat = update.lat.clone();
-            state.selected_location_lon = update.lon.clone();
+            state.selected_location = Some(update.clone());
         }
         state.recent_resolving = false;
     }
@@ -813,7 +800,7 @@ pub fn resolve_recent_locations_if_needed() {
     crate::ui::build::rerender_main_ui();
 }
 
-fn fetch_first_location(query: &str) -> Result<LocationOption, String> {
+fn fetch_first_location(query: &str) -> Result<CityLocation, String> {
     let base = api_url("/api/geo/lookup")?;
     let url = Url::parse_with_params(&base, &[("location", query)])
         .map_err(|e| format!("URL解析失败: {}", e))?
@@ -825,7 +812,7 @@ fn fetch_first_location(query: &str) -> Result<LocationOption, String> {
         .and_then(|v| v.first())
         .ok_or_else(|| "未找到匹配地区".to_string())?;
 
-    Ok(LocationOption {
+    Ok(CityLocation {
         id: first
             .get("id")
             .and_then(|v| v.as_str())
@@ -843,16 +830,6 @@ fn fetch_first_location(query: &str) -> Result<LocationOption, String> {
             .to_string(),
         adm2: first
             .get("adm2")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        lat: first
-            .get("lat")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        lon: first
-            .get("lon")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
