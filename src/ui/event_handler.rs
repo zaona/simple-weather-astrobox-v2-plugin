@@ -810,7 +810,7 @@ fn fetch_first_location(query: &str) -> Result<CityLocation, String> {
         .get("location")
         .and_then(|v| v.as_array())
         .and_then(|v| v.first())
-        .ok_or_else(|| "未找到匹配地区".to_string())?;
+        .ok_or_else(|| "未找到匹配位置".to_string())?;
 
     Ok(CityLocation {
         id: first

@@ -177,11 +177,11 @@ fn build_sync_card_text() -> String {
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    let location = if state.last_sync_location.is_empty() {
-        "暂无"
-    } else {
-        state.last_sync_location.as_str()
-    };
+    if state.last_sync_time_ms == 0 && state.last_sync_location.is_empty() {
+        return "暂无数据".to_string();
+    }
+
+    let location = state.last_sync_location.as_str();
 
     let (time_text, expired) = if state.last_sync_time_ms == 0 {
         ("暂无".to_string(), false)
@@ -193,10 +193,7 @@ fn build_sync_card_text() -> String {
     };
 
     let expired_mark = if expired { " (已过期)" } else { "" };
-    format!(
-        "地区: {}\n时间: {}{}",
-        location, time_text, expired_mark
-    )
+    format!("{} {}{}", location, time_text, expired_mark)
 }
 
 fn format_relative(elapsed_ms: u64) -> String {

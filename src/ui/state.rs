@@ -73,7 +73,7 @@ impl CityLocation {
     /// 显示名称，对齐 syncer-ng 的 `CityLocation.toString()`: "北京 (北京市 - 北京)"
     pub fn to_display_name(&self) -> String {
         if self.name.trim().is_empty() {
-            return "未知地区".to_string();
+            return "未知位置".to_string();
         }
         if self.adm1.is_empty() && self.adm2.is_empty() {
             self.name.clone()
@@ -132,6 +132,10 @@ struct StoredApiSettings {
     selected_location_json: String,
     #[serde(default)]
     recent_locations: Vec<CityLocation>,
+    #[serde(default)]
+    last_sync_time_ms: u64,
+    #[serde(default)]
+    last_sync_location: String,
 }
 
 pub fn load_api_settings_once() {
@@ -167,6 +171,8 @@ pub fn load_api_settings_once() {
                 state.selected_location =
                     CityLocation::from_json(&stored.selected_location_json);
                 state.recent_locations = stored.recent_locations;
+                state.last_sync_time_ms = stored.last_sync_time_ms;
+                state.last_sync_location = stored.last_sync_location;
                 if state.selected_location.is_none() {
                     let first = state.recent_locations.first().cloned();
                     if let Some(first) = first {
@@ -204,6 +210,8 @@ pub fn save_all_settings() -> Result<(), String> {
             .map(|l| l.to_json())
             .unwrap_or_default(),
         recent_locations: state.recent_locations.clone(),
+        last_sync_time_ms: state.last_sync_time_ms,
+        last_sync_location: state.last_sync_location.clone(),
     };
 
     let content = serde_json::to_string_pretty(&stored).map_err(|e| e.to_string())?;
