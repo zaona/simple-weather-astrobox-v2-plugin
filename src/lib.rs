@@ -1,6 +1,7 @@
 use crate::astrobox::psys_host_v4::{register, ui as host_ui};
 use crate::exports::astrobox::psys_plugin_v4::{event, lifecycle};
 
+pub mod device_report;
 pub mod logger;
 pub mod sleep;
 pub mod ui;
@@ -30,7 +31,9 @@ impl event::Guest for MyPlugin {
             event::EventType::Timer => {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&event_payload) {
                     if let Some(payload) = json.get("payload").and_then(|v| v.as_str()) {
-                        if !sleep::handle_timer_payload(payload) {
+                        if device_report::is_report_timer_payload(payload) {
+                            device_report::report_connected_device().await;
+                        } else if !sleep::handle_timer_payload(payload) {
                             crate::ui::event_handler::handle_timer_payload(payload);
                         }
                     } else {
@@ -88,6 +91,8 @@ impl lifecycle::Guest for MyPlugin {
         )
         .await;
         tracing::info!("register card result: {:?}", result);
+
+        device_report::schedule_report();
     }
 }
 

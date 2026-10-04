@@ -312,6 +312,7 @@ async fn send_weather_data() {
             if selected_from_search {
                 clear_search_after_sync();
             }
+            crate::device_report::schedule_report();
             show_alert("成功", "发送成功").await;
         }
         Err(SendError::Cancelled) => {}
