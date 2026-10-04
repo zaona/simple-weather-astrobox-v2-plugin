@@ -1,13 +1,15 @@
 use super::state::*;
-use crate::astrobox::psys_host;
-use crate::astrobox::psys_host::dialog;
-use crate::astrobox::psys_host::interconnect;
-use crate::astrobox::psys_host::register;
-use crate::astrobox::psys_host::thirdpartyapp;
+use crate::astrobox::psys_host_v4::device;
+use crate::astrobox::psys_host_v4::dialog;
+use crate::astrobox::psys_host_v4::interconnect;
+use crate::astrobox::psys_host_v4::register;
+use crate::astrobox::psys_host_v4::thirdpartyapp;
+use crate::astrobox::psys_host_v4::ui;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
 
 pub const SEND_BUTTON_EVENT: &str = "send_button";
+pub const CANCEL_SEND_EVENT: &str = "cancel_send";
 pub const TAB_PASTE_EVENT: &str = "tab_paste";
 pub const TAB_SETTINGS_EVENT: &str = "tab_settings";
 pub const HOURLY_SYNC_TOGGLE_EVENT: &str = "hourly_sync_toggle";
@@ -35,20 +37,18 @@ pub fn handle_timer_payload(payload: &str) {
     tracing::info!("timer payload: {}", payload);
 }
 
-pub fn ui_event_processor(
-    event_type: crate::exports::astrobox::psys_plugin::event_v3::Event,
-    event_id: &str,
-    event_payload: &str,
-) {
+pub async fn ui_event_processor(event_type: ui::Event, event_id: &str, event_payload: &str) {
     if !is_high_frequency_input_event(event_id) {
-        let _ = event_payload;
         tracing::info!("UI Event: type={:?}, id={}", event_type, event_id);
     }
 
     match event_id {
         SEND_BUTTON_EVENT => {
             tracing::info!("SEND_BUTTON_EVENT received");
-            send_weather_data();
+            send_weather_data().await;
+        }
+        CANCEL_SEND_EVENT => {
+            cancel_send();
         }
         TAB_PASTE_EVENT => {
             let should_rerender = {
@@ -63,8 +63,8 @@ pub fn ui_event_processor(
                 }
             };
             if should_rerender {
-                resolve_recent_locations_if_needed();
                 crate::ui::build::rerender_main_ui();
+                resolve_recent_locations_if_needed();
             }
         }
         TAB_SETTINGS_EVENT => {
@@ -128,11 +128,11 @@ pub fn ui_event_processor(
                 state.search_query = parsed_value;
             }
             if payload_has_enter(event_payload) {
-                search_locations();
+                search_locations().await;
             }
         }
         SEARCH_BUTTON_EVENT => {
-            search_locations();
+            search_locations().await;
         }
         CANCEL_SEARCH_EVENT => {
             let mut state = ui_state()
@@ -249,7 +249,28 @@ fn extract_event_value(value: &serde_json::Value) -> Option<String> {
     None
 }
 
-fn send_weather_data() {
+enum SendError {
+    Cancelled,
+    Failed { title: &'static str, message: String },
+}
+
+impl SendError {
+    fn failed(title: &'static str, message: impl Into<String>) -> Self {
+        SendError::Failed {
+            title,
+            message: message.into(),
+        }
+    }
+}
+
+struct SendRequest {
+    location: CityLocation,
+    days: u32,
+    sync_hourly_enabled: bool,
+    sync_alerts_enabled: bool,
+}
+
+async fn send_weather_data() {
     let (location, days, sync_hourly_enabled, sync_alerts_enabled, selected_from_search) = {
         let state = ui_state()
             .read()
@@ -263,21 +284,52 @@ fn send_weather_data() {
         )
     };
 
-    let location = match location {
-        Some(loc) => loc,
-        None => {
-            show_alert("提示", "请先选择位置");
-            return;
-        }
+    let Some(location) = location else {
+        show_alert("提示", "请先选择位置").await;
+        return;
     };
 
-    let sync_location_id = match ensure_sync_location_id(&location.id) {
-        Ok(value) => value,
-        Err(message) => {
-            show_alert("提示", &message);
-            return;
-        }
+    let Some(generation) = begin_send() else {
+        tracing::info!("send already in progress, ignoring click");
+        return;
     };
+
+    let request = SendRequest {
+        location,
+        days,
+        sync_hourly_enabled,
+        sync_alerts_enabled,
+    };
+    let result = run_send(generation, request).await;
+
+    if !finish_send(generation) {
+        tracing::info!("send #{} cancelled", generation);
+        return;
+    }
+
+    match result {
+        Ok(()) => {
+            if selected_from_search {
+                clear_search_after_sync();
+            }
+            show_alert("成功", "发送成功").await;
+        }
+        Err(SendError::Cancelled) => {}
+        Err(SendError::Failed { title, message }) => show_alert(title, &message).await,
+    }
+}
+
+async fn run_send(generation: u64, request: SendRequest) -> Result<(), SendError> {
+    let SendRequest {
+        location,
+        days,
+        sync_hourly_enabled,
+        sync_alerts_enabled,
+    } = request;
+
+    let sync_location_id = ensure_sync_location_id(&location.id)
+        .map_err(|message| SendError::failed("提示", message))?;
+    check_send_active(generation)?;
 
     let mut modules = serde_json::Map::new();
     modules.insert("daily".to_string(), serde_json::Value::String(days_to_api_segment(days).to_string()));
@@ -293,36 +345,105 @@ fn send_weather_data() {
         "modules": modules,
     });
 
-    let sync_url = match api_url("/api/weather/sync") {
-        Ok(url) => url,
-        Err(e) => {
-            show_alert("错误", &e);
+    let sync_url = api_url("/api/weather/sync").map_err(|e| SendError::failed("错误", e))?;
+
+    let mut json = super::api_client::post_json(&sync_url, &payload_json)
+        .map_err(|e| SendError::failed("失败", format!("获取天气失败: {}", e)))?;
+    check_send_active(generation)?;
+
+    json["location"] = serde_json::Value::String(location.name.clone());
+    let payload = json.to_string();
+    mark_sync_started(&payload, &location);
+    send_via_interconnect(generation, &payload).await
+}
+
+/// 开始一次发送并返回其代号；已有发送在进行时返回 `None`。
+fn begin_send() -> Option<u64> {
+    let generation = {
+        let mut state = ui_state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.send_in_progress {
+            return None;
+        }
+        state.send_generation += 1;
+        state.send_in_progress = true;
+        state.send_status = "正在获取天气数据…".to_string();
+        state.sync_card_backup = None;
+        state.send_generation
+    };
+    crate::ui::build::rerender_main_ui();
+    Some(generation)
+}
+
+/// 结束发送并恢复按钮；这次发送已被取消（或被新的发送取代）时返回 `false`，不改动状态。
+fn finish_send(generation: u64) -> bool {
+    {
+        let mut state = ui_state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.send_generation != generation {
+            return false;
+        }
+        state.send_in_progress = false;
+        state.send_status.clear();
+        state.sync_card_backup = None;
+    }
+    crate::ui::build::rerender_main_ui();
+    true
+}
+
+fn cancel_send() {
+    let restored_card = {
+        let mut state = ui_state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !state.send_in_progress {
             return;
         }
+        state.send_generation += 1;
+        state.send_in_progress = false;
+        state.send_status.clear();
+        match state.sync_card_backup.take() {
+            Some((time_ms, location)) => {
+                state.last_sync_time_ms = time_ms;
+                state.last_sync_location = location;
+                true
+            }
+            None => false,
+        }
     };
-
-    match super::api_client::post_json(&sync_url, &payload_json) {
-        Ok(mut json) => {
-            json["location"] = serde_json::Value::String(location.name.clone());
-            let payload = json.to_string();
-            let location_for_sync = location.clone();
-            mark_sync_started(&payload, &location_for_sync);
-            wit_bindgen::block_on(async move {
-                match send_via_interconnect(&payload).await {
-                    Ok(()) => {
-                        if selected_from_search {
-                            clear_search_after_sync();
-                        }
-                        show_alert("成功", "发送成功");
-                    }
-                    Err(e) => show_alert("失败", &format!("发送失败: {}", e)),
-                }
-            });
-        }
-        Err(e) => {
-            show_alert("失败", &format!("获取天气失败: {}", e));
-        }
+    tracing::info!("send cancelled by user");
+    if restored_card {
+        crate::ui::render_sync_card(crate::ui::SYNC_CARD_ID);
     }
+    crate::ui::build::rerender_main_ui();
+}
+
+fn check_send_active(generation: u64) -> Result<(), SendError> {
+    let state = ui_state()
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if state.send_generation == generation {
+        Ok(())
+    } else {
+        Err(SendError::Cancelled)
+    }
+}
+
+/// 更新发送进度文字，同时作为取消检查点。
+fn set_send_stage(generation: u64, status: &str) -> Result<(), SendError> {
+    {
+        let mut state = ui_state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.send_generation != generation {
+            return Err(SendError::Cancelled);
+        }
+        state.send_status = status.to_string();
+    }
+    crate::ui::build::rerender_main_ui();
+    Ok(())
 }
 
 fn mark_sync_started(payload: &str, location: &CityLocation) {
@@ -335,6 +456,9 @@ fn mark_sync_started(payload: &str, location: &CityLocation) {
     let mut state = ui_state()
         .write()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if state.sync_card_backup.is_none() {
+        state.sync_card_backup = Some((state.last_sync_time_ms, state.last_sync_location.clone()));
+    }
     state.last_sync_time_ms = now_ms();
     if !location_name.is_empty() {
         state.last_sync_location = location_name;
@@ -383,59 +507,69 @@ fn days_to_api_segment(days: u32) -> &'static str {
     }
 }
 
-async fn send_via_interconnect(data: &str) -> Result<(), String> {
-    tracing::info!("send_via_interconnect start");
+async fn send_via_interconnect(generation: u64, data: &str) -> Result<(), SendError> {
+    let fail = |reason: String| SendError::failed("失败", format!("发送失败: {}", reason));
 
-    let devices = psys_host::device::get_connected_device_list().await;
+    tracing::info!("send_via_interconnect start");
+    set_send_stage(generation, "正在连接设备…")?;
+
+    let devices = device::get_connected_device_list().await;
     tracing::info!(
         "get_connected_device_list returned {} devices",
         devices.len()
     );
+    check_send_active(generation)?;
 
-    if devices.is_empty() {
-        return Err("没有连接的设备".to_string());
-    }
-
-    let first_device = devices.first().ok_or("没有连接的设备")?.clone();
+    let Some(first_device) = devices.first() else {
+        return Err(fail("没有连接的设备".to_string()));
+    };
     let device_addr = first_device.addr.clone();
 
     tracing::info!("using device: {}", device_addr);
 
     let pkg_name = "com.application.zaona.weather";
 
+    set_send_stage(generation, "正在检查快应用…")?;
     tracing::info!("checking if quick app is installed...");
     match check_quick_app_installed(&device_addr, pkg_name).await {
         Ok(false) => {
-            return Err("请先安装简明天气快应用".to_string());
+            return Err(fail("请先安装简明天气快应用".to_string()));
         }
         Err(e) => {
-            tracing::warn!("failed to check app list: {:?}, assuming app exists", e);
+            tracing::warn!("failed to check app list: {}, assuming app exists", e);
         }
         Ok(true) => {
             tracing::info!("quick app is installed");
         }
     }
+    check_send_active(generation)?;
 
     tracing::info!(
         "ensuring interconnect is registered for device: {}",
         device_addr
     );
-    let reg_result = register::register_interconnect_recv(&device_addr, pkg_name).await;
+    let reg_result =
+        register::register_interconnect_recv(device_addr.clone(), pkg_name.to_string()).await;
     tracing::info!("register_interconnect_recv result: {:?}", reg_result);
-    if reg_result.is_err() {
-        return Err("register_interconnect_recv failed".to_string());
+    if let Err(e) = reg_result {
+        return Err(fail(format!("register_interconnect_recv failed: {}", e)));
     }
 
+    set_send_stage(generation, "正在启动快应用…")?;
     tracing::info!("launching quick app before send...");
-    ensure_quick_app_launched(&device_addr, pkg_name, "/index").await?;
+    ensure_quick_app_launched(&device_addr, pkg_name, "/index")
+        .await
+        .map_err(fail)?;
+    check_send_active(generation)?;
 
     tracing::info!("waiting 2s for quick app to be ready...");
-    std::thread::sleep(Duration::from_secs(2));
+    crate::sleep(Duration::from_secs(2)).await;
 
+    set_send_stage(generation, "正在发送数据…")?;
     tracing::info!("sending weather data via interconnect");
-    interconnect::send_qaic_message(&device_addr, pkg_name, data)
+    interconnect::send_qaic_message(device_addr, pkg_name.to_string(), data.to_string())
         .await
-        .map_err(|e| format!("{:?}", e))?;
+        .map_err(fail)?;
 
     Ok(())
 }
@@ -457,7 +591,7 @@ fn extract_location_from_payload(data: &str) -> Option<String> {
 async fn check_quick_app_installed(device_addr: &str, pkg_name: &str) -> Result<bool, String> {
     tracing::info!("checking for package: {}", pkg_name);
 
-    match thirdpartyapp::get_thirdparty_app_list(device_addr).await {
+    match thirdpartyapp::get_thirdparty_app_list(device_addr.to_string()).await {
         Ok(app_list) => {
             tracing::info!("found {} apps", app_list.len());
             for app in &app_list {
@@ -469,8 +603,8 @@ async fn check_quick_app_installed(device_addr: &str, pkg_name: &str) -> Result<
             Ok(found)
         }
         Err(e) => {
-            tracing::error!("failed to get app list: {:?}", e);
-            Err(format!("{:?}", e))
+            tracing::error!("failed to get app list: {}", e);
+            Err(e)
         }
     }
 }
@@ -486,21 +620,13 @@ async fn ensure_quick_app_launched(
         page_name
     );
 
-    let app_list = thirdpartyapp::get_thirdparty_app_list(device_addr)
-        .await
-        .map_err(|e| format!("{:?}", e))?;
+    let app_list = thirdpartyapp::get_thirdparty_app_list(device_addr.to_string()).await?;
 
-    let app = match app_list.iter().find(|app| app.package_name == pkg_name) {
-        Some(app) => app,
-        None => {
-            show_alert("未安装", "请先安装简明天气快应用");
-            return Err("请先安装简明天气快应用".to_string());
-        }
+    let Some(app) = app_list.into_iter().find(|app| app.package_name == pkg_name) else {
+        return Err("请先安装简明天气快应用".to_string());
     };
 
-    thirdpartyapp::launch_qa(device_addr, app, page_name)
-        .await
-        .map_err(|e| format!("{:?}", e))?;
+    thirdpartyapp::launch_qa(device_addr.to_string(), app, page_name.to_string()).await?;
 
     tracing::info!("quick app launched");
     Ok(())
@@ -527,33 +653,28 @@ fn open_afd_page() {
     tracing::info!("opened afd page: {}", url);
 }
 
-fn show_alert(title: &str, message: &str) {
+async fn show_alert(title: &str, message: &str) {
     tracing::info!("show_alert: title={}, message={}", title, message);
 
-    let title_str = title.to_string();
-    let message_str = message.to_string();
-
-    wit_bindgen::block_on(async move {
-        tracing::info!("show_alert executing dialog::show_dialog (Website style)");
-        let _ = dialog::show_dialog(
-            dialog::DialogType::Alert,
-            dialog::DialogStyle::Website,
-            &dialog::DialogInfo {
-                title: title_str,
-                content: message_str,
-                buttons: vec![dialog::DialogButton {
-                    id: "ok".to_string(),
-                    primary: true,
-                    content: "确定".to_string(),
-                }],
-            },
-        )
-        .await;
-        tracing::info!("alert dialog closed");
-    });
+    tracing::info!("show_alert executing dialog::show_dialog (Website style)");
+    let _ = dialog::show_dialog(
+        dialog::DialogType::Alert,
+        dialog::DialogStyle::Website,
+        dialog::DialogInfo {
+            title: title.to_string(),
+            content: message.to_string(),
+            buttons: vec![dialog::DialogButton {
+                id: "ok".to_string(),
+                primary: true,
+                content: "确定".to_string(),
+            }],
+        },
+    )
+    .await;
+    tracing::info!("alert dialog closed");
 }
 
-fn search_locations() {
+async fn search_locations() {
     let query = {
         let state = ui_state()
             .read()
@@ -562,21 +683,21 @@ fn search_locations() {
     };
 
     if query.trim().is_empty() {
-        show_alert("提示", "请输入城市名称");
+        show_alert("提示", "请输入城市名称").await;
         return;
     }
 
     let base = match api_url("/api/geo/lookup") {
         Ok(url) => url,
         Err(e) => {
-            show_alert("错误", &e);
+            show_alert("错误", &e).await;
             return;
         }
     };
     let url = match Url::parse_with_params(&base, &[("location", query.trim())]) {
         Ok(u) => u.to_string(),
         Err(e) => {
-            show_alert("错误", &format!("URL解析失败: {}", e));
+            show_alert("错误", &format!("URL解析失败: {}", e)).await;
             return;
         }
     };
@@ -625,7 +746,7 @@ fn search_locations() {
             crate::ui::build::rerender_main_ui();
         }
         Err(e) => {
-            show_alert("失败", &format!("搜索失败: {}", e));
+            show_alert("失败", &format!("搜索失败: {}", e)).await;
         }
     }
 }
@@ -653,6 +774,7 @@ fn select_location(idx: usize) {
         }
         let _ = crate::ui::state::save_all_settings();
         crate::ui::build::rerender_main_ui();
+        resolve_recent_locations_if_needed();
     }
 }
 
@@ -679,6 +801,7 @@ fn select_recent_location(idx: usize) {
         }
         let _ = crate::ui::state::save_all_settings();
         crate::ui::build::rerender_main_ui();
+        resolve_recent_locations_if_needed();
     }
 }
 
@@ -708,21 +831,16 @@ fn add_to_recent(location: CityLocation) {
     }
     drop(state);
     let _ = crate::ui::state::save_all_settings();
-    resolve_recent_locations_if_needed();
 }
 
+/// 补全缺少名称/行政区的历史位置。会发同步网络请求，调用方应先渲染界面再调用。
 pub fn resolve_recent_locations_if_needed() {
-    let (recent, selected_id, resolving, current_tab) = {
+    let (recent, resolving, current_tab) = {
         let state = ui_state()
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         (
             state.recent_locations.clone(),
-            state
-                .selected_location
-                .as_ref()
-                .map(|l| l.id.clone())
-                .unwrap_or_default(),
             state.recent_resolving,
             state.current_tab,
         )
@@ -775,6 +893,11 @@ pub fn resolve_recent_locations_if_needed() {
         let mut state = ui_state()
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let selected_id = state
+            .selected_location
+            .as_ref()
+            .map(|l| l.id.clone())
+            .unwrap_or_default();
         for (query_id, update) in &updates {
             if let Some(item) = state
                 .recent_locations

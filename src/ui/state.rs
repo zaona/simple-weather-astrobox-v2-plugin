@@ -26,6 +26,12 @@ pub struct UiState {
     pub show_location_picker: bool,
     pub last_sync_time_ms: u64,
     pub last_sync_location: String,
+    pub send_in_progress: bool,
+    /// 每次开始或取消发送都会递增；进行中的发送发现代号变了就放弃后续步骤。
+    pub send_generation: u64,
+    pub send_status: String,
+    /// 发送开始时提前刷新了同步卡片，取消时用它还原 (last_sync_time_ms, last_sync_location)。
+    pub sync_card_backup: Option<(u64, String)>,
 }
 
 pub fn server_api_base() -> Result<&'static str, String> {
@@ -113,6 +119,10 @@ pub fn ui_state() -> &'static RwLock<UiState> {
             show_location_picker: false,
             last_sync_time_ms: 0,
             last_sync_location: String::new(),
+            send_in_progress: false,
+            send_generation: 0,
+            send_status: String::new(),
+            sync_card_backup: None,
         };
         RwLock::new(state)
     })

@@ -2,8 +2,7 @@ use super::SYNC_CARD_ID;
 use super::event_handler::*;
 use super::icons;
 use super::state::*;
-use crate::astrobox::psys_host;
-use crate::astrobox::psys_host::ui_v3 as ui;
+use crate::astrobox::psys_host_v4::ui;
 pub fn render_main_ui(element_id: &str) {
     {
         let mut state = ui_state()
@@ -13,10 +12,11 @@ pub fn render_main_ui(element_id: &str) {
     }
 
     crate::ui::state::load_api_settings_once();
-    crate::ui::event_handler::resolve_recent_locations_if_needed();
 
     let ui_tree = build_main_ui();
-    psys_host::ui_v3::render(element_id, ui_tree);
+    ui::render(element_id, ui_tree);
+
+    crate::ui::event_handler::resolve_recent_locations_if_needed();
 }
 
 pub fn build_main_ui() -> ui::Element {
@@ -50,7 +50,7 @@ pub fn render_sync_card(card_id: &str) {
     }
     let text = build_sync_card_text();
     tracing::info!("render_sync_card content: {}", text);
-    psys_host::ui_v3::render_to_text_card(card_id, &text);
+    ui::render_to_text_card(card_id, &text);
 }
 
 fn build_tabs(state: &UiState) -> ui::Element {
@@ -324,16 +324,59 @@ fn build_advanced_send_tab(state: &UiState) -> ui::Element {
     )
     .margin_bottom(10);
 
-    let send_button =
+    let send_area = if state.send_in_progress {
+        build_sending_row(&state.send_status)
+    } else {
         build_icon_text_button_full("同步数据", icons::send_tab_svg(), SEND_BUTTON_EVENT)
             .bg("#0090FF26")
-            .text_color("#0090FF");
+            .text_color("#0090FF")
+    };
 
     root.child(location_card)
         .child(days_card)
         .child(hourly_card)
         .child(alerts_card)
-        .child(send_button)
+        .child(send_area)
+}
+
+fn build_sending_row(status: &str) -> ui::Element {
+    let status_text = if status.is_empty() { "正在发送…" } else { status };
+
+    let status_el = ui::Element::new(ui::ElementType::Div, None)
+        .radius(18)
+        .padding(14)
+        .bg("#0090FF14")
+        .text_color("#0090FF")
+        .flex()
+        .align_center()
+        .justify_center()
+        .flex_grow(1.0)
+        .opacity(0.8)
+        .child(ui::Element::new(ui::ElementType::Span, Some(status_text)).size(14));
+
+    let cancel_btn = ui::Element::new(ui::ElementType::Button, None)
+        .without_default_styles()
+        .on(ui::Event::Click, CANCEL_SEND_EVENT)
+        .radius(18)
+        .padding_top(14)
+        .padding_bottom(14)
+        .padding_left(18)
+        .padding_right(18)
+        .bg("#FF453A26")
+        .text_color("#FF453A")
+        .flex()
+        .align_center()
+        .justify_center()
+        .child(ui::Element::new(ui::ElementType::Span, Some("取消发送")).size(14));
+
+    ui::Element::new(ui::ElementType::Div, None)
+        .flex()
+        .flex_direction(ui::FlexDirection::Row)
+        .align_center()
+        .width_full()
+        .gap(8)
+        .child(status_el)
+        .child(cancel_btn)
 }
 
 fn build_location_picker(state: &UiState) -> ui::Element {
@@ -341,8 +384,8 @@ fn build_location_picker(state: &UiState) -> ui::Element {
     let back_btn = ui::Element::new(ui::ElementType::Button, None)
         .without_default_styles()
         .on(ui::Event::Click, CLOSE_LOCATION_PICKER_EVENT)
-        .width(36)
-        .height(36)
+        .width(40)
+        .height(40)
         .radius(999)
         .bg("#2A2A2A")
         .flex()
@@ -536,7 +579,7 @@ pub fn rerender_main_ui() {
 
     if let Some(element_id) = element_id {
         let ui_tree = build_main_ui();
-        psys_host::ui_v3::render(&element_id, ui_tree);
+        ui::render(&element_id, ui_tree);
     }
 }
 

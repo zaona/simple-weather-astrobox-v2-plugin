@@ -1,23 +1,22 @@
-use wit_bindgen::FutureReader;
-
-use crate::exports::astrobox::psys_plugin::{event_v3 as event, lifecycle};
+use crate::astrobox::psys_host_v4::{register, ui as host_ui};
+use crate::exports::astrobox::psys_plugin_v4::{event, lifecycle};
 
 pub mod logger;
+pub mod sleep;
 pub mod ui;
+
+pub use sleep::sleep;
 
 wit_bindgen::generate!({
     path: "wit",
-    world: "psys-world-v3",
+    world: "psys-world-v4",
     generate_all,
 });
 
 struct MyPlugin;
 
 impl event::Guest for MyPlugin {
-    #[allow(async_fn_in_trait)]
-    fn on_event(event_type: event::EventType, event_payload: _rt::String) -> FutureReader<String> {
-        let (writer, reader) = wit_future::new::<String>(|| "".to_string());
-
+    async fn on_event(event_type: event::EventType, event_payload: String) -> String {
         tracing::info!(
             "DEBUG - event_type: {:?}, event_payload: {}",
             event_type,
@@ -31,7 +30,9 @@ impl event::Guest for MyPlugin {
             event::EventType::Timer => {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&event_payload) {
                     if let Some(payload) = json.get("payload").and_then(|v| v.as_str()) {
-                        crate::ui::event_handler::handle_timer_payload(payload);
+                        if !sleep::handle_timer_payload(payload) {
+                            crate::ui::event_handler::handle_timer_payload(payload);
+                        }
                     } else {
                         tracing::info!("Timer event without payload field: {}", event_payload);
                     }
@@ -46,58 +47,26 @@ impl event::Guest for MyPlugin {
             }
         }
 
-        wit_bindgen::spawn(async move {
-            let _ = writer.write("".to_string()).await;
-        });
-
-        reader
+        String::new()
     }
 
-    fn on_ui_event_v3(
-        event_id: _rt::String,
-        event_type: event::Event,
-        event_payload: _rt::String,
-    ) -> wit_bindgen::rt::async_support::FutureReader<_rt::String> {
-        let (writer, reader) = wit_future::new::<String>(|| "".to_string());
-
-        ui::ui_event_processor(event_type, &event_id, &event_payload);
-
-        wit_bindgen::spawn(async move {
-            let _ = writer.write("".to_string()).await;
-        });
-
-        reader
+    async fn on_ui_event(event_id: String, event_type: host_ui::Event, event_payload: String) -> String {
+        ui::ui_event_processor(event_type, &event_id, &event_payload).await;
+        String::new()
     }
 
-    fn on_ui_render(element_id: _rt::String) -> wit_bindgen::rt::async_support::FutureReader<()> {
-        let (writer, reader) = wit_future::new::<()>(|| ());
-
+    async fn on_ui_render(element_id: String) {
         ui::render_main_ui(&element_id);
-
-        wit_bindgen::spawn(async move {
-            let _ = writer.write(()).await;
-        });
-
-        reader
     }
 
-    fn on_card_render(card_id: _rt::String) -> wit_bindgen::rt::async_support::FutureReader<()> {
-        let (writer, reader) = wit_future::new::<()>(|| ());
-
+    async fn on_card_render(card_id: String) {
         tracing::info!("on_card_render called: {}", card_id);
         ui::render_sync_card(&card_id);
-
-        wit_bindgen::spawn(async move {
-            let _ = writer.write(()).await;
-        });
-
-        reader
     }
 }
 
 impl lifecycle::Guest for MyPlugin {
-    #[allow(async_fn_in_trait)]
-    fn on_load() -> () {
+    async fn on_load() {
         logger::init();
         let build_time = option_env!("AB_BUILD_TIME").unwrap_or("unknown");
         let build_user = option_env!("AB_BUILD_USER").unwrap_or("unknown");
@@ -112,15 +81,13 @@ impl lifecycle::Guest for MyPlugin {
         );
         tracing::info!("Simple Interconnect Plugin Loaded!");
 
-        wit_bindgen::block_on(async move {
-            let result = crate::astrobox::psys_host::register::register_card(
-                crate::astrobox::psys_host::register::CardType::Text,
-                crate::ui::SYNC_CARD_ID,
-                crate::ui::SYNC_CARD_NAME,
-            )
-            .await;
-            tracing::info!("register card result: {:?}", result);
-        });
+        let result = register::register_card(
+            register::CardType::Text,
+            crate::ui::SYNC_CARD_ID.to_string(),
+            crate::ui::SYNC_CARD_NAME.to_string(),
+        )
+        .await;
+        tracing::info!("register card result: {:?}", result);
     }
 }
 
