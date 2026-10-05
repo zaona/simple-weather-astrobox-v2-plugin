@@ -11,7 +11,20 @@ use url::Url;
 pub const SEND_BUTTON_EVENT: &str = "send_button";
 pub const CANCEL_SEND_EVENT: &str = "cancel_send";
 pub const TAB_PASTE_EVENT: &str = "tab_paste";
+pub const TAB_BACKGROUND_EVENT: &str = "tab_background";
 pub const TAB_SETTINGS_EVENT: &str = "tab_settings";
+pub const BG_CANCEL_EVENT: &str = "bg_cancel";
+pub const BG_CLEAR_ALL_EVENT: &str = "bg_clear_all";
+pub const BG_DARKEN_SLIDER_EVENT: &str = "bg_darken_slider";
+pub const BG_BLUR_SLIDER_EVENT: &str = "bg_blur_slider";
+pub const BG_GUIDE_EVENT: &str = "bg_guide";
+pub const BG_CLOSE_GUIDE_EVENT: &str = "bg_close_guide";
+pub const BG_IMPORT_EVENT: &str = "bg_import";
+pub const BG_EXPORT_EVENT: &str = "bg_export";
+pub const BG_LIGHTBOX_PREFIX: &str = "bg_lightbox:";
+pub const BG_CLOSE_LIGHTBOX_EVENT: &str = "bg_close_lightbox";
+pub const BG_PICK_PREFIX: &str = "bg_pick:";
+pub const BG_DELETE_PREFIX: &str = "bg_delete:";
 pub const HOURLY_SYNC_TOGGLE_EVENT: &str = "hourly_sync_toggle";
 pub const ALERTS_SYNC_TOGGLE_EVENT: &str = "alerts_sync_toggle";
 pub const OPEN_HELP_DOC_EVENT: &str = "open_help_doc";
@@ -47,6 +60,14 @@ pub async fn ui_event_processor(event_type: ui::Event, event_id: &str, event_pay
             tracing::info!("SEND_BUTTON_EVENT received");
             send_weather_data().await;
         }
+        id if id.starts_with(BG_PICK_PREFIX) => {
+            let code = id.trim_start_matches(BG_PICK_PREFIX).to_string();
+            pick_background_image(&code).await;
+        }
+        id if id.starts_with(BG_DELETE_PREFIX) => {
+            let code = id.trim_start_matches(BG_DELETE_PREFIX).to_string();
+            confirm_remove_background(&code).await;
+        }
         CANCEL_SEND_EVENT => {
             cancel_send();
         }
@@ -66,6 +87,76 @@ pub async fn ui_event_processor(event_type: ui::Event, event_id: &str, event_pay
                 crate::ui::build::rerender_main_ui();
                 resolve_recent_locations_if_needed();
             }
+        }
+        TAB_BACKGROUND_EVENT => {
+            // 刷新预览会再次取状态锁，必须在写锁释放之后调用
+            let entered = {
+                let mut state = ui_state()
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let entered = state.current_tab != MainTab::Background;
+                if entered {
+                    state.current_tab = MainTab::Background;
+                    state.bg_codes = crate::bg::saved_codes();
+                }
+                entered
+            };
+            if entered {
+                ensure_background_thumbs();
+            }
+            crate::ui::build::rerender_main_ui();
+        }
+        BG_DARKEN_SLIDER_EVENT => apply_background_slider(true, parse_event_value(event_payload)),
+        BG_BLUR_SLIDER_EVENT => apply_background_slider(false, parse_event_value(event_payload)),
+        BG_CANCEL_EVENT => {
+            crate::bg::cancel_active();
+            crate::ui::build::rerender_main_ui();
+        }
+        BG_CLEAR_ALL_EVENT => {
+            if !confirm(
+                "删除全部",
+                "将清空所有自定义背景图，全部恢复默认背景。",
+                "删除",
+            )
+            .await
+            {
+                return;
+            }
+            crate::bg::clear_all();
+            {
+                let mut state = ui_state()
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.bg_codes = crate::bg::saved_codes();
+                state.bg_thumbs.clear();
+                state.bg_lightbox = None;
+                state.bg_preview_uri.clear();
+            }
+            crate::ui::build::rerender_main_ui();
+        }
+        BG_GUIDE_EVENT => {
+            {
+                let mut state = ui_state()
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.bg_guide = true;
+            }
+            crate::ui::build::rerender_main_ui();
+        }
+        BG_CLOSE_GUIDE_EVENT => {
+            {
+                let mut state = ui_state()
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.bg_guide = false;
+            }
+            crate::ui::build::rerender_main_ui();
+        }
+        BG_IMPORT_EVENT => import_preset_package().await,
+        BG_EXPORT_EVENT => export_preset_package().await,
+        BG_CLOSE_LIGHTBOX_EVENT => {
+            close_lightbox();
+            crate::ui::build::rerender_main_ui();
         }
         TAB_SETTINGS_EVENT => {
             let should_rerender = {
@@ -183,12 +274,327 @@ pub async fn ui_event_processor(event_type: ui::Event, event_id: &str, event_pay
             }
         }
     }
+
     if event_id.starts_with(SELECT_RECENT_PREFIX) {
         if let Some(idx_str) = event_id.strip_prefix(SELECT_RECENT_PREFIX) {
             if let Ok(idx) = idx_str.parse::<usize>() {
                 select_recent_location(idx);
             }
         }
+    }
+}
+
+/// 一张图保存完成或全部清除后，刷新背景图页签的列表状态。
+/// 只在用户正看着背景图页签时重绘，避免打断其它页面。
+pub fn on_background_transfer_committed(reply: &crate::bg::session::Reply) {
+    let should_rerender = {
+        let mut state = ui_state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.bg_codes = crate::bg::saved_codes();
+        match reply {
+            crate::bg::session::Reply::ImageSaved { weather_code } => {
+                state.bg_thumbs.remove(weather_code);
+            }
+            crate::bg::session::Reply::ClearDone => {
+                state.bg_thumbs.clear();
+                state.bg_lightbox = None;
+                state.bg_preview_uri.clear();
+            }
+            crate::bg::session::Reply::Cancelled => {}
+        }
+        state.current_tab == MainTab::Background
+    };
+
+    if should_rerender {
+        ensure_background_thumbs();
+        crate::ui::build::rerender_main_ui();
+    }
+}
+
+/// 滑块提交：更新数值、从原件重算当前选中图、刷新预览。
+/// 宿主只在 `onValueCommit` 派发 CHANGE，拖动过程中不会重复解码图片。
+fn apply_background_slider(is_darken: bool, raw_value: String) {
+    let value = match raw_value.trim().parse::<f64>() {
+        Ok(value) => value.round().clamp(0.0, 100.0) as u32,
+        Err(_) => {
+            tracing::warn!("背景图滑块取值解析失败: {:?}", raw_value);
+            return;
+        }
+    };
+
+    let (lightbox, darken, blur) = {
+        let mut state = ui_state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if is_darken {
+            state.bg_darken = value;
+        } else {
+            state.bg_blur = value;
+        }
+        (
+            state.bg_lightbox.clone(),
+            state.bg_darken,
+            state.bg_blur,
+        )
+    };
+
+    let _ = crate::ui::state::save_all_settings();
+
+    // 灯箱里那张立刻重算给出反馈，其余的分帧后台重算，避免界面卡住
+    if let Some(code) = lightbox.clone() {
+        if let Err(e) = crate::bg::apply_edit(&code, darken, blur) {
+            tracing::warn!("重算 {} 成品图失败: {}", code, e);
+        }
+        cache_thumbnail(&code, darken, blur);
+        open_lightbox(&code, darken, blur);
+    }
+
+    let codes = {
+        let state = ui_state()
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state
+            .bg_codes
+            .iter()
+            .filter(|code| lightbox.as_deref() != Some(code.as_str()))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    crate::bg::schedule_apply_all(codes, darken, blur);
+    crate::ui::build::rerender_main_ui();
+}
+
+/// 拉起系统图片选择器，导入后立即按当前滑块出成品图并刷新这一行
+async fn pick_background_image(code: &str) {
+    if !crate::bg::protocol::is_known_code(code) {
+        return;
+    }
+
+    let (darken, blur) = {
+        let state = ui_state()
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        (state.bg_darken, state.bg_blur)
+    };
+
+    match crate::bg::pick_and_import(code, darken, blur).await {
+        Ok(Some(_name)) => {
+            refresh_background_code(code);
+            crate::ui::build::rerender_main_ui();
+        }
+        Ok(None) => {
+            tracing::info!("用户取消了图片选择");
+        }
+        Err(reason) => {
+            tracing::warn!("导入 {} 背景图失败: {}", code, reason);
+            show_alert("导入失败", &reason).await;
+        }
+    }
+}
+
+/// 删除前二次确认：原件一并删掉，删了就回落到默认背景，没法撤销
+async fn confirm_remove_background(code: &str) {
+    if !crate::bg::protocol::is_known_code(code) {
+        return;
+    }
+    let label = crate::bg::store::label_of(code);
+    let confirmed = confirm(
+        "删除自定义背景",
+        &format!("将删除「{}」并恢复默认背景。", label),
+        "删除",
+    )
+    .await;
+    if confirmed {
+        remove_background_image(code);
+    }
+}
+
+/// 导入 `.swbg` 预设包
+async fn import_preset_package() {
+    match crate::bg::preset::import_from_picker().await {
+        Ok(None) => tracing::info!("用户取消了预设包导入"),
+        Ok(Some(summary)) => {
+            {
+                let mut state = ui_state()
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.bg_darken = summary.darken;
+                state.bg_blur = summary.blur;
+                state.bg_codes = crate::bg::saved_codes();
+                state.bg_thumbs.clear();
+            }
+            let _ = crate::ui::state::save_all_settings();
+            ensure_background_thumbs();
+            show_alert(
+                "导入完成",
+                &format!(
+                    "已导入 {} 张背景图{}，压暗 {} / 模糊 {}",
+                    summary.imported,
+                    if summary.skipped > 0 {
+                        format!("，跳过 {} 张", summary.skipped)
+                    } else {
+                        String::new()
+                    },
+                    summary.darken,
+                    summary.blur
+                ),
+            )
+            .await;
+            crate::ui::build::rerender_main_ui();
+        }
+        Err(reason) => {
+            tracing::warn!("导入预设包失败: {}", reason);
+            show_alert("导入失败", &reason).await;
+        }
+    }
+}
+
+/// 导出 `.swbg` 预设包
+async fn export_preset_package() {
+    let (darken, blur) = {
+        let state = ui_state()
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        (state.bg_darken, state.bg_blur)
+    };
+
+    match crate::bg::preset::export_to_disk(darken, blur).await {
+        Ok(()) => {
+            show_alert("导出成功", "预设包已保存到你选择的位置").await;
+        }
+        Err(reason) => {
+            tracing::warn!("导出预设包失败: {}", reason);
+            if reason.contains("取消") {
+                return;
+            }
+            show_alert("导出失败", &reason).await;
+        }
+    }
+}
+
+/// 通用确认框，点确认返回 true
+async fn confirm(title: &str, message: &str, ok_label: &str) -> bool {
+    let result = crate::astrobox::psys_host_v4::dialog::show_dialog(
+        crate::astrobox::psys_host_v4::dialog::DialogType::Alert,
+        crate::astrobox::psys_host_v4::dialog::DialogStyle::Website,
+        crate::astrobox::psys_host_v4::dialog::DialogInfo {
+            title: title.to_string(),
+            content: message.to_string(),
+            buttons: vec![
+                crate::astrobox::psys_host_v4::dialog::DialogButton {
+                    id: "cancel".to_string(),
+                    primary: false,
+                    content: "取消".to_string(),
+                },
+                crate::astrobox::psys_host_v4::dialog::DialogButton {
+                    id: "ok".to_string(),
+                    primary: true,
+                    content: ok_label.to_string(),
+                },
+            ],
+        },
+    )
+    .await;
+    result.clicked_btn_id == "ok"
+}
+
+/// 删除某张自定义背景图
+fn remove_background_image(code: &str) {
+    if !crate::bg::protocol::is_known_code(code) {
+        return;
+    }
+    crate::bg::remove(code);
+    {
+        let mut state = ui_state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.bg_codes = crate::bg::saved_codes();
+        state.bg_thumbs.remove(code);
+        if state.bg_lightbox.as_deref() == Some(code) {
+            state.bg_lightbox = None;
+            state.bg_preview_uri.clear();
+        }
+    }
+    crate::ui::build::rerender_main_ui();
+}
+
+/// 某张图变化后（导入完成、传输落盘、清除）刷新缩略图；正开着它的灯箱时同步换图
+pub fn refresh_background_code(code: &str) {
+    let (lightbox, darken, blur) = {
+        let mut state = ui_state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.bg_codes = crate::bg::saved_codes();
+        state.bg_thumbs.remove(code);
+        let lightbox = state.bg_lightbox.as_deref() == Some(code);
+        if lightbox {
+            state.bg_preview_uri.clear();
+        }
+        (lightbox, state.bg_darken, state.bg_blur)
+    };
+
+    cache_thumbnail(code, darken, blur);
+    if lightbox {
+        open_lightbox(code, darken, blur);
+    }
+}
+
+/// 进背景图页时给所有已配置的图补一次缩略图，之后走缓存
+fn ensure_background_thumbs() {
+    let (codes, cached, darken, blur) = {
+        let state = ui_state()
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        (
+            crate::bg::saved_codes(),
+            state.bg_thumbs.keys().cloned().collect::<std::collections::HashSet<_>>(),
+            state.bg_darken,
+            state.bg_blur,
+        )
+    };
+
+    for code in codes {
+        if !cached.contains(&code) {
+            cache_thumbnail(&code, darken, blur);
+        }
+    }
+}
+
+/// 打开灯箱：载入原图 data URI
+fn open_lightbox(code: &str, darken: u32, blur: u32) {
+    let uri = crate::bg::preview_data_uri(code, darken, blur, true);
+    let mut state = ui_state()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match uri {
+        Ok(uri) => {
+            state.bg_lightbox = Some(code.to_string());
+            state.bg_preview_uri = uri;
+        }
+        Err(e) => {
+            tracing::warn!("打开 {} 灯箱失败: {}", code, e);
+            state.bg_lightbox = Some(code.to_string());
+            state.bg_preview_uri.clear();
+        }
+    }
+}
+
+fn close_lightbox() {
+    let mut state = ui_state()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    state.bg_lightbox = None;
+    state.bg_preview_uri.clear();
+}
+
+/// 缩略图按需生成一次，存进状态复用
+fn cache_thumbnail(code: &str, darken: u32, blur: u32) {
+    if let Ok(uri) = crate::bg::preview_data_uri(code, darken, blur, false) {
+        let mut state = ui_state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.bg_thumbs.insert(code.to_string(), uri);
     }
 }
 

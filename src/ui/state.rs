@@ -98,6 +98,7 @@ impl UiState {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum MainTab {
     PasteData,
+    Background,
     Settings,
 }
 

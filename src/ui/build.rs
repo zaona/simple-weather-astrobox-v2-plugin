@@ -24,6 +24,7 @@ pub fn build_main_ui() -> ui::Element {
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
+    // 页签条和内容的左右留白分开控制：窄屏时页签几乎贴边，把宽度全让给三个页签
     let container = ui::Element::new(ui::ElementType::Div, None)
         .flex()
         .flex_direction(ui::FlexDirection::Column)
@@ -33,6 +34,7 @@ pub fn build_main_ui() -> ui::Element {
     let tabs = build_tabs(&state);
     let content = match state.current_tab {
         MainTab::PasteData => build_send_tab(&state),
+        MainTab::Background => super::bg_page::build_bg_tab(&state),
         MainTab::Settings => build_settings_tab(&state),
     };
 
@@ -73,6 +75,13 @@ fn build_tabs(state: &UiState) -> ui::Element {
         TAB_PASTE_EVENT,
     );
 
+    let background_trigger = build_tab_trigger(
+        "背景图",
+        icons::image_tab_svg(),
+        state.current_tab == MainTab::Background,
+        TAB_BACKGROUND_EVENT,
+    );
+
     let settings_trigger = build_tab_trigger(
         "设置",
         icons::api_tab_svg(),
@@ -80,7 +89,12 @@ fn build_tabs(state: &UiState) -> ui::Element {
         TAB_SETTINGS_EVENT,
     );
 
-    tabs_root.child(tabs_list.child(paste_trigger).child(settings_trigger))
+    tabs_root.child(
+        tabs_list
+            .child(paste_trigger)
+            .child(background_trigger)
+            .child(settings_trigger),
+    )
 }
 
 fn build_send_tab(state: &UiState) -> ui::Element {
