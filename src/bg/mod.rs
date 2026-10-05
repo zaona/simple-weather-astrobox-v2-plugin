@@ -238,16 +238,14 @@ pub fn apply_edit(code: &str, darken: u32, blur: u32) -> Result<(), String> {
         .map_err(|e| format!("写入成品图失败: {}", e))
 }
 
-/// 生成预览用的 data URI。`full` 为真时出原图分辨率，否则出缩略图。
-pub fn preview_data_uri(code: &str, darken: u32, blur: u32, full: bool) -> Result<String, String> {
+/// 生成缩略图 data URI：1:1 填满的正方形（等比放大到铺满后居中裁剪），不做拉伸。
+pub fn preview_data_uri(code: &str, darken: u32, blur: u32) -> Result<String, String> {
     let source = store::load_source(code).ok_or_else(|| format!("{} 没有原件", code))?;
     let processed = edit::process(&source, darken, blur)?;
-    if full {
-        Ok(edit::data_uri(&processed))
-    } else {
-        let thumb = edit::thumbnail(&processed)?;
-        Ok(edit::data_uri(&thumb))
-    }
+    Ok(edit::data_uri(&edit::square_cover(
+        &processed,
+        edit::THUMBNAIL_SIZE,
+    )?))
 }
 
 /// 读取成品图，供壁纸渲染直接消费

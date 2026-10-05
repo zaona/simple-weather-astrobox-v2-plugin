@@ -21,8 +21,6 @@ pub const BG_GUIDE_EVENT: &str = "bg_guide";
 pub const BG_CLOSE_GUIDE_EVENT: &str = "bg_close_guide";
 pub const BG_IMPORT_EVENT: &str = "bg_import";
 pub const BG_EXPORT_EVENT: &str = "bg_export";
-pub const BG_LIGHTBOX_PREFIX: &str = "bg_lightbox:";
-pub const BG_CLOSE_LIGHTBOX_EVENT: &str = "bg_close_lightbox";
 pub const BG_PICK_PREFIX: &str = "bg_pick:";
 pub const BG_DELETE_PREFIX: &str = "bg_delete:";
 pub const HOURLY_SYNC_TOGGLE_EVENT: &str = "hourly_sync_toggle";
@@ -131,8 +129,6 @@ pub async fn ui_event_processor(event_type: ui::Event, event_id: &str, event_pay
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 state.bg_codes = crate::bg::saved_codes();
                 state.bg_thumbs.clear();
-                state.bg_lightbox = None;
-                state.bg_preview_uri.clear();
             }
             crate::ui::build::rerender_main_ui();
         }
@@ -156,10 +152,6 @@ pub async fn ui_event_processor(event_type: ui::Event, event_id: &str, event_pay
         }
         BG_IMPORT_EVENT => import_preset_package().await,
         BG_EXPORT_EVENT => export_preset_package().await,
-        BG_CLOSE_LIGHTBOX_EVENT => {
-            close_lightbox();
-            crate::ui::build::rerender_main_ui();
-        }
         TAB_SETTINGS_EVENT => {
             let should_rerender = {
                 let mut state = ui_state()
@@ -300,8 +292,6 @@ pub fn on_background_transfer_committed(reply: &crate::bg::session::Reply) {
             }
             crate::bg::session::Reply::ClearDone => {
                 state.bg_thumbs.clear();
-                state.bg_lightbox = None;
-                state.bg_preview_uri.clear();
             }
             crate::bg::session::Reply::Cancelled => {}
         }
@@ -314,7 +304,7 @@ pub fn on_background_transfer_committed(reply: &crate::bg::session::Reply) {
     }
 }
 
-/// 滑块提交：更新数值、从原件重算当前选中图、刷新预览。
+/// 滑块提交：更新数值，然后从原件把已配置的图逐张重算。
 /// 宿主只在 `onValueCommit` 派发 CHANGE，拖动过程中不会重复解码图片。
 fn apply_background_slider(is_darken: bool, raw_value: String) {
     let value = match raw_value.trim().parse::<f64>() {
@@ -325,7 +315,7 @@ fn apply_background_slider(is_darken: bool, raw_value: String) {
         }
     };
 
-    let (lightbox, darken, blur) = {
+    let (darken, blur) = {
         let mut state = ui_state()
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -334,34 +324,17 @@ fn apply_background_slider(is_darken: bool, raw_value: String) {
         } else {
             state.bg_blur = value;
         }
-        (
-            state.bg_lightbox.clone(),
-            state.bg_darken,
-            state.bg_blur,
-        )
+        (state.bg_darken, state.bg_blur)
     };
 
     let _ = crate::ui::state::save_all_settings();
 
-    // 灯箱里那张立刻重算给出反馈，其余的分帧后台重算，避免界面卡住
-    if let Some(code) = lightbox.clone() {
-        if let Err(e) = crate::bg::apply_edit(&code, darken, blur) {
-            tracing::warn!("重算 {} 成品图失败: {}", code, e);
-        }
-        cache_thumbnail(&code, darken, blur);
-        open_lightbox(&code, darken, blur);
-    }
-
+    // 分帧后台重算，每算完一张顺手刷新它的缩略图，避免界面卡住
     let codes = {
         let state = ui_state()
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        state
-            .bg_codes
-            .iter()
-            .filter(|code| lightbox.as_deref() != Some(code.as_str()))
-            .cloned()
-            .collect::<Vec<_>>()
+        state.bg_codes.clone()
     };
     crate::bg::schedule_apply_all(codes, darken, blur);
     crate::ui::build::rerender_main_ui();
@@ -414,22 +387,57 @@ async fn confirm_remove_background(code: &str) {
 
 /// 导入 `.swbg` 预设包
 async fn import_preset_package() {
-    match crate::bg::preset::import_from_picker().await {
-        Ok(None) => tracing::info!("用户取消了预设包导入"),
-        Ok(Some(summary)) => {
+    let picked = match crate::bg::preset::pick_package().await {
+        Ok(None) => {
+            tracing::info!("用户取消了预设包导入");
+            return;
+        }
+        Ok(Some(picked)) => picked,
+        Err(reason) => {
+            tracing::warn!("打开预设包失败: {}", reason);
+            show_alert("导入失败", &reason).await;
+            return;
+        }
+    };
+
+    // 与安卓一致：先只读解析，让用户确认覆盖再真正写入
+    match crate::bg::preset::peek_count(&picked.1) {
+        Ok(count) => {
+            let confirmed = confirm(
+                "确认导入",
+                &format!("预设包包含 {count} 张背景图，若已有配置将被覆盖。确定继续吗？"),
+                "继续",
+            )
+            .await;
+            if !confirmed {
+                tracing::info!("用户取消了预设包导入");
+                return;
+            }
+        }
+        Err(reason) => {
+            tracing::warn!("解析预设包失败: {}", reason);
+            show_alert("导入失败", &reason).await;
+            return;
+        }
+    }
+
+    match crate::bg::preset::import(&picked.1) {
+        Ok(summary) => {
             {
                 let mut state = ui_state()
                     .write()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 state.bg_darken = summary.darken;
                 state.bg_blur = summary.blur;
+                state.bg_quality = summary.quality;
+                state.bg_advanced_sync_mode = summary.advanced_sync_mode;
                 state.bg_codes = crate::bg::saved_codes();
                 state.bg_thumbs.clear();
             }
             let _ = crate::ui::state::save_all_settings();
             ensure_background_thumbs();
             show_alert(
-                "导入完成",
+                "导入成功",
                 &format!(
                     "已导入 {} 张背景图{}，压暗 {} / 模糊 {}",
                     summary.imported,
@@ -454,14 +462,19 @@ async fn import_preset_package() {
 
 /// 导出 `.swbg` 预设包
 async fn export_preset_package() {
-    let (darken, blur) = {
+    let (darken, blur, quality, advanced_sync_mode) = {
         let state = ui_state()
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        (state.bg_darken, state.bg_blur)
+        (
+            state.bg_darken,
+            state.bg_blur,
+            state.bg_quality,
+            state.bg_advanced_sync_mode,
+        )
     };
 
-    match crate::bg::preset::export_to_disk(darken, blur).await {
+    match crate::bg::preset::export_to_disk(darken, blur, quality, advanced_sync_mode).await {
         Ok(()) => {
             show_alert("导出成功", "预设包已保存到你选择的位置").await;
         }
@@ -513,33 +526,22 @@ fn remove_background_image(code: &str) {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.bg_codes = crate::bg::saved_codes();
         state.bg_thumbs.remove(code);
-        if state.bg_lightbox.as_deref() == Some(code) {
-            state.bg_lightbox = None;
-            state.bg_preview_uri.clear();
-        }
     }
     crate::ui::build::rerender_main_ui();
 }
 
-/// 某张图变化后（导入完成、传输落盘、清除）刷新缩略图；正开着它的灯箱时同步换图
+/// 某张图变化后（导入完成、传输落盘、滑块重算）刷新它的缩略图
 pub fn refresh_background_code(code: &str) {
-    let (lightbox, darken, blur) = {
+    let (darken, blur) = {
         let mut state = ui_state()
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.bg_codes = crate::bg::saved_codes();
         state.bg_thumbs.remove(code);
-        let lightbox = state.bg_lightbox.as_deref() == Some(code);
-        if lightbox {
-            state.bg_preview_uri.clear();
-        }
-        (lightbox, state.bg_darken, state.bg_blur)
+        (state.bg_darken, state.bg_blur)
     };
 
     cache_thumbnail(code, darken, blur);
-    if lightbox {
-        open_lightbox(code, darken, blur);
-    }
 }
 
 /// 进背景图页时给所有已配置的图补一次缩略图，之后走缓存
@@ -563,36 +565,9 @@ fn ensure_background_thumbs() {
     }
 }
 
-/// 打开灯箱：载入原图 data URI
-fn open_lightbox(code: &str, darken: u32, blur: u32) {
-    let uri = crate::bg::preview_data_uri(code, darken, blur, true);
-    let mut state = ui_state()
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    match uri {
-        Ok(uri) => {
-            state.bg_lightbox = Some(code.to_string());
-            state.bg_preview_uri = uri;
-        }
-        Err(e) => {
-            tracing::warn!("打开 {} 灯箱失败: {}", code, e);
-            state.bg_lightbox = Some(code.to_string());
-            state.bg_preview_uri.clear();
-        }
-    }
-}
-
-fn close_lightbox() {
-    let mut state = ui_state()
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    state.bg_lightbox = None;
-    state.bg_preview_uri.clear();
-}
-
 /// 缩略图按需生成一次，存进状态复用
 fn cache_thumbnail(code: &str, darken: u32, blur: u32) {
-    if let Ok(uri) = crate::bg::preview_data_uri(code, darken, blur, false) {
+    if let Ok(uri) = crate::bg::preview_data_uri(code, darken, blur) {
         let mut state = ui_state()
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());

@@ -3,13 +3,12 @@
 //! 两套版式，按宿主渲染区宽度分派（见 `UiState::is_compact_layout`）：
 //!
 //! - 移动端（<640px）：单列列表，右侧一颗切换/加号按钮
-//! - 桌面端（≥640px）：自适应列网格，每张一个竖版卡片
+//! - 桌面端（≥640px）：自适应列网格，每张一个方形预览图卡片
 //!
 //! 交互对齐安卓 `BackgroundImageItem`，并按端上交互做了调整：
 //!
 //! - 没有图 → 点整张卡片/整行 → 拉起系统图片选择器导入
-//! - 已有图 → 点图 → 打开灯箱预览；卡片右上角的切换按钮 → 换一张
-//! - 删除放在灯箱里，避免卡片上堆两颗按钮
+//! - 已有图 → 右上角 ✕ 删除并恢复默认（二次确认），删完再点该格导入新的
 //!
 //! 滑块用宿主的 `SLIDER`（Radix Themes Slider），只传 `default-value`：宿主只挂了
 //! `onValueCommit`，一旦传 `value` 就变成受控模式，拖动过程中 thumb 不会跟随，
@@ -23,10 +22,8 @@ use crate::astrobox::psys_host_v4::ui;
 /// 滑块量程，与安卓 `valueRange = 0f..100f` 一致
 const SLIDER_MAX: u32 = 100;
 const ROW_THUMB_SIZE: u32 = 40;
-const CARD_THUMB_WIDTH: u32 = 168;
-const CARD_THUMB_HEIGHT: u32 = 214;
-const LIGHTBOX_WIDTH: u32 = 300;
-const LIGHTBOX_HEIGHT: u32 = 357;
+/// 缩略图统一 1:1，图片按填满（居中裁剪）显示，不做拉伸
+const CARD_THUMB_SIZE: u32 = 168;
 
 /// 传输状态那行的固定高度（单行 13px 文字）
 const STATUS_LINE_HEIGHT: u32 = 18;
@@ -48,9 +45,6 @@ pub fn build_bg_tab(state: &UiState) -> ui::Element {
 
     if state.bg_guide {
         return build_guide();
-    }
-    if let Some(code) = state.bg_lightbox.clone() {
-        return build_lightbox(state, &code);
     }
 
     root.child(build_transfer_card())
@@ -171,7 +165,7 @@ fn build_guide() -> ui::Element {
         ),
         (
             "已配置的样子",
-            "有图的卡片/行右上角是 ✕ 删除，点图本身打开大图灯箱。没有图时整块可点，点一下就是导入。桌面端排成多列卡片，移动端排成单列列表，行为完全一致。",
+            "没有图的整块卡片/整行可点，点一下就是导入；已有图时右上角 ✕ 删除并恢复默认（二次确认），删完这一格回到未配置，再点一次导入新的。桌面端排成多列卡片，移动端排成单列列表，行为完全一致。",
         ),
         (
             "删除即恢复默认",
@@ -247,74 +241,6 @@ fn build_guide() -> ui::Element {
         CARD_INNER_BG,
         ACCENT,
     ))
-}
-
-/// 灯箱：整屏看原图，换图 / 删除 / 返回都在这里
-fn build_lightbox(state: &UiState, code: &str) -> ui::Element {
-    let title = format!("{} · {}", code, crate::bg::store::label_of(code));
-
-    let mut card = build_card().child(
-        ui::Element::new(ui::ElementType::Div, None)
-            .flex()
-            .flex_direction(ui::FlexDirection::Row)
-            .align_center()
-            .width_full()
-            .gap(10)
-            .child(
-                ui::Element::new(ui::ElementType::Button, None)
-                    .without_default_styles()
-                    .on(ui::Event::Click, BG_CLOSE_LIGHTBOX_EVENT)
-                    .radius(999)
-                    .width(32)
-                    .height(32)
-                    .bg(CARD_INNER_BG)
-                    .flex()
-                    .align_center()
-                    .justify_center()
-                    .child(
-                        ui::Element::new(ui::ElementType::Svg, Some(&icons::back_arrow_svg()))
-                            .width(18)
-                            .height(18)
-                            .text_color("#FFFFFF"),
-                    ),
-            )
-            .child(ui::Element::new(ui::ElementType::P, Some(&title)).size(15)),
-    );
-
-    if state.bg_preview_uri.is_empty() {
-        return card.child(
-            ui::Element::new(ui::ElementType::P, Some("图片读取失败，请重新导入"))
-                .size(13)
-                .text_color(DANGER),
-        );
-    }
-
-    card = card
-        .flex()
-        .flex_direction(ui::FlexDirection::Column)
-        .align_center()
-        .child(
-            ui::Element::new(ui::ElementType::Image, Some(&state.bg_preview_uri))
-                .radius(14)
-                .width(LIGHTBOX_WIDTH)
-                .height(LIGHTBOX_HEIGHT),
-        );
-
-    let remove = build_small_button(
-        "删除并恢复默认",
-        &format!("{}{}", BG_DELETE_PREFIX, code),
-        "#FF453A1F",
-        DANGER,
-    );
-    let back = build_small_button("返回列表", BG_CLOSE_LIGHTBOX_EVENT, CARD_INNER_BG, "#FFFFFF");
-
-    if state.is_compact_layout() {
-        return card.child(back).child(remove);
-    }
-    card.flex_direction(ui::FlexDirection::Row)
-        .justify_center()
-        .child(back)
-        .child(remove)
 }
 
 /// 传输状态：文案对齐手环端 `image-service.js` 的 message
@@ -489,21 +415,21 @@ fn build_code_list_card(state: &UiState) -> ui::Element {
     build_card().child(header).child(grid)
 }
 
-/// 桌面卡片：竖版预览图在上、天气文字在下，右上角是切换按钮。
-/// 没有图 → 整张卡片点一下导入；有图 → 点图开灯箱。
+/// 桌面卡片：方形预览图在上、天气文字在下，右上角是删除/导入按钮。
+/// 没有图时整张卡片可点，点了就是导入；已有图只能先点 ✕ 删除。
 fn build_code_card(code: &str, label: &str, state: &UiState) -> ui::Element {
     let has_custom = state.bg_codes.iter().any(|saved| saved == code);
 
     let preview = match state.bg_thumbs.get(code).map(String::as_str) {
         Some(uri) => {
             ui::Element::new(ui::ElementType::Image, Some(uri))
-                .width(CARD_THUMB_WIDTH)
-                .height(CARD_THUMB_HEIGHT)
+                .width(CARD_THUMB_SIZE)
+                .height(CARD_THUMB_SIZE)
                 .radius(10)
         }
         None => ui::Element::new(ui::ElementType::Div, None)
-            .width(CARD_THUMB_WIDTH)
-            .height(CARD_THUMB_HEIGHT)
+            .width(CARD_THUMB_SIZE)
+            .height(CARD_THUMB_SIZE)
             .radius(10)
             .bg(CARD_INNER_BG)
             .flex()
@@ -520,8 +446,8 @@ fn build_code_card(code: &str, label: &str, state: &UiState) -> ui::Element {
     // 右上角动作按钮：没图是加号，有图是叉号
     let thumb = ui::Element::new(ui::ElementType::Div, None)
         .relative()
-        .width(CARD_THUMB_WIDTH)
-        .height(CARD_THUMB_HEIGHT)
+        .width(CARD_THUMB_SIZE)
+        .height(CARD_THUMB_SIZE)
         .child(preview)
         .child(
             ui::Element::new(ui::ElementType::Div, None)
@@ -568,7 +494,8 @@ fn build_code_card(code: &str, label: &str, state: &UiState) -> ui::Element {
                     .text_color(MUTED),
             );
         }
-        card.on(ui::Event::Click, &format!("{}{}", BG_LIGHTBOX_PREFIX, code))
+        // 已有图：整张卡片不可点，换图要先走 ✕ 删除
+        card
     } else {
         // 没有图：整张卡片就是导入入口
         card.on(ui::Event::Click, &format!("{}{}", BG_PICK_PREFIX, code))
@@ -577,7 +504,7 @@ fn build_code_card(code: &str, label: &str, state: &UiState) -> ui::Element {
 
 /// 列表行：对齐安卓 `BackgroundImageItem`——缩略图 + 两行文字 + 右侧一颗图标
 ///
-/// 没有图 → 整行点一下导入；已有图 → 点行开灯箱，✕ 删除。
+/// 没有图时整行可点，点了就是导入；已有图只能先点 ✕ 删除。
 fn build_code_row(code: &str, label: &str, state: &UiState) -> ui::Element {
     let has_custom = state.bg_codes.iter().any(|saved| saved == code);
 
@@ -650,10 +577,7 @@ fn build_code_row(code: &str, label: &str, state: &UiState) -> ui::Element {
         )
     });
 
-    // 有图点行看大图，没图点行直接导入
-    if has_custom {
-        row = row.on(ui::Event::Click, &format!("{}{}", BG_LIGHTBOX_PREFIX, code));
-    } else {
+    if !has_custom {
         row = row.on(ui::Event::Click, &format!("{}{}", BG_PICK_PREFIX, code));
     }
 

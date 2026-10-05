@@ -24,23 +24,46 @@ pub const FORMAT_VERSION: u32 = 1;
 pub const FILE_EXTENSION: &str = "swbg";
 const MANIFEST_ENTRY: &str = "manifest.json";
 const IMAGES_DIR: &str = "images/";
+/// 导出对话框的默认文件名，与安卓端 `CreateDocument` 的初始名一致
+const DEFAULT_EXPORT_NAME: &str = "weather_backgrounds.swbg";
+/// 与安卓端 `GlobalSettings.quality` 的默认值一致
+const DEFAULT_QUALITY: u32 = 85;
 
 /// 导入结果摘要，用于弹窗告知用户
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct ImportSummary {
     pub imported: usize,
     pub skipped: usize,
     pub darken: u32,
     pub blur: u32,
+    /// 包里的 `quality`，插件端不参与出图，只原样存下来供再次导出
+    pub quality: u32,
+    /// 包里的 `advancedSyncMode`，同上
+    pub advanced_sync_mode: bool,
 }
 
+impl Default for ImportSummary {
+    fn default() -> Self {
+        ImportSummary {
+            imported: 0,
+            skipped: 0,
+            darken: 0,
+            blur: 0,
+            quality: DEFAULT_QUALITY,
+            advanced_sync_mode: true,
+        }
+    }
+}
+
+// 字段名与安卓端 Gson 的 @SerializedName 逐字对齐（camelCase）
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PresetSettings {
     #[serde(default)]
     darken_strength: u32,
     #[serde(default)]
     blur_radius: u32,
-    #[serde(default)]
+    #[serde(default = "default_quality")]
     quality: u32,
 }
 
@@ -49,18 +72,19 @@ impl Default for PresetSettings {
         PresetSettings {
             darken_strength: 0,
             blur_radius: 0,
-            quality: 85,
+            quality: DEFAULT_QUALITY,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct GlobalSettings {
     #[serde(default)]
     darken_strength: u32,
     #[serde(default)]
     blur_radius: u32,
-    #[serde(default)]
+    #[serde(default = "default_quality")]
     quality: u32,
     #[serde(default = "default_true")]
     advanced_sync_mode: bool,
@@ -70,18 +94,23 @@ fn default_true() -> bool {
     true
 }
 
+fn default_quality() -> u32 {
+    DEFAULT_QUALITY
+}
+
 impl Default for GlobalSettings {
     fn default() -> Self {
         GlobalSettings {
             darken_strength: 0,
             blur_radius: 0,
-            quality: 85,
+            quality: DEFAULT_QUALITY,
             advanced_sync_mode: true,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PresetEntry {
     weather_code: String,
     #[serde(default)]
@@ -99,70 +128,86 @@ fn default_format() -> String {
     "png".to_string()
 }
 
-// manifest 的字段名用 camelCase，与安卓 Gson 的 @SerializedName 对齐
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PresetManifest {
-    #[serde(rename = "formatVersion")]
     format_version: u32,
-    #[serde(rename = "appVersion", default)]
+    #[serde(default)]
     app_version: String,
-    #[serde(rename = "exportTimestamp", default)]
+    #[serde(default)]
     export_timestamp: u64,
     #[serde(default)]
     metadata: BTreeMap<String, String>,
-    #[serde(rename = "globalSettings")]
     global_settings: GlobalSettings,
     presets: Vec<PresetEntry>,
 }
 
 /// 把当前已配置的背景图打包成 `.swbg` 字节
-pub fn export(darken: u32, blur: u32) -> Result<Vec<u8>, String> {
+pub fn export(
+    darken: u32,
+    blur: u32,
+    quality: u32,
+    advanced_sync_mode: bool,
+) -> Result<Vec<u8>, String> {
     let metas = super::store::metas();
-    if metas.is_empty() {
+
+    // 与安卓一致：按码表顺序导出已配置的编号，而不是按落盘顺序
+    let configured: Vec<&str> = super::protocol::WEATHER_BG_CODES
+        .iter()
+        .map(|(code, _)| *code)
+        .filter(|code| metas.iter().any(|meta| meta.code == *code))
+        .collect();
+    if configured.is_empty() {
         return Err("没有已配置的背景图可导出".to_string());
     }
 
+    let global_settings = GlobalSettings {
+        darken_strength: darken,
+        blur_radius: blur,
+        quality,
+        advanced_sync_mode,
+    };
+
     let mut presets = Vec::new();
     let mut images: Vec<(String, Vec<u8>)> = Vec::new();
-    for meta in &metas {
-        let Some(source) = super::store::load_source(&meta.code) else {
-            continue;
+    for code in configured {
+        let label = super::protocol::label_of(code);
+        // 安卓端读不到原图会直接让整次导出失败，这里保持一致
+        let Some(source) = super::store::load_source(code) else {
+            return Err(format!("无法读取图片: {}", label));
         };
+        let meta = metas
+            .iter()
+            .find(|meta| meta.code == code)
+            .expect("configured 来自 metas");
         let ext = super::store::extension_of(&meta.ext);
-        let entry_name = format!("{IMAGES_DIR}{}.{}", meta.code, ext);
+        let entry_name = format!("{IMAGES_DIR}{}.{}", code, ext);
+        let original_file_name = if meta.label.trim().is_empty() {
+            format!("{}.{}", code, ext)
+        } else {
+            meta.label.clone()
+        };
         images.push((entry_name.clone(), source));
         presets.push(PresetEntry {
-            weather_code: meta.code.clone(),
-            weather_label: super::protocol::label_of(&meta.code).to_string(),
+            weather_code: code.to_string(),
+            weather_label: label.to_string(),
             image_file: entry_name,
             image_format: ext,
-            original_file_name: meta.label.clone(),
+            original_file_name,
             settings: PresetSettings {
                 darken_strength: darken,
                 blur_radius: blur,
-                quality: 85,
+                quality,
             },
         });
-    }
-
-    if presets.is_empty() {
-        return Err("没有可导出的原件".to_string());
     }
 
     let manifest = PresetManifest {
         format_version: FORMAT_VERSION,
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         export_timestamp: now_ms(),
-        metadata: BTreeMap::from([(
-            "generator".to_string(),
-            "simple-weather-astrobox-plugin".to_string(),
-        )]),
-        global_settings: GlobalSettings {
-            darken_strength: darken,
-            blur_radius: blur,
-            quality: 85,
-            advanced_sync_mode: true,
-        },
+        metadata: BTreeMap::new(),
+        global_settings,
         presets,
     };
     let manifest_json = serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?;
@@ -189,8 +234,10 @@ pub fn export(darken: u32, blur: u32) -> Result<Vec<u8>, String> {
     Ok(buffer.into_inner())
 }
 
-/// 解析 `.swbg` 并导入，返回导入摘要。用户取消选择时返回 `Ok(None)`。
-pub async fn import_from_picker() -> Result<Option<ImportSummary>, String> {
+/// 拉起系统文件选择器挑一个 `.swbg`，返回文件名与字节。用户取消时返回 `Ok(None)`。
+///
+/// 分成「挑包」和「导入」两步，是为了和安卓一样在真正写入前先让用户确认。
+pub async fn pick_package() -> Result<Option<(String, Vec<u8>)>, String> {
     use crate::astrobox::psys_host_v4::dialog;
 
     let picked = dialog::pick_file(
@@ -211,17 +258,29 @@ pub async fn import_from_picker() -> Result<Option<ImportSummary>, String> {
     if picked.name.is_empty() || picked.data.is_empty() {
         return Ok(None);
     }
-    import(&picked.data).map(Some)
+    // 与安卓一致：按文件名再挡一次非 .swbg
+    if !picked
+        .name
+        .to_ascii_lowercase()
+        .ends_with(&format!(".{FILE_EXTENSION}"))
+    {
+        return Err("请选择 .swbg 格式的预设包文件".to_string());
+    }
+    Ok(Some((picked.name, picked.data)))
 }
 
-/// 解析 `.swbg` 字节并写入 `bg/`，按包内参数出成品图
-pub fn import(bytes: &[u8]) -> Result<ImportSummary, String> {
+/// 只读解析包，返回包内的预设数量，对齐安卓的 `peekImportInfo`
+pub fn peek_count(bytes: &[u8]) -> Result<usize, String> {
+    load_manifest(bytes).map(|(_, manifest)| manifest.presets.len())
+}
+
+/// 打开并校验 manifest，返回归档与 manifest 供后续读取
+fn load_manifest(bytes: &[u8]) -> Result<(ZipArchive<Cursor<&[u8]>>, PresetManifest), String> {
     let mut archive = ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("不是有效的预设包: {}", e))?;
 
     let manifest_json = read_entry(&mut archive, MANIFEST_ENTRY)?
         .ok_or_else(|| "预设包中未找到 manifest.json".to_string())?;
-    let manifest: PresetManifest = serde_json::from_slice(&manifest_json)
-        .map_err(|e| format!("解析 manifest 失败: {}", e))?;
+    let manifest = parse_manifest(&manifest_json)?;
 
     if manifest.format_version > FORMAT_VERSION {
         tracing::warn!(
@@ -233,38 +292,63 @@ pub fn import(bytes: &[u8]) -> Result<ImportSummary, String> {
     if manifest.presets.is_empty() {
         return Err("预设包中没有图片".to_string());
     }
+    Ok((archive, manifest))
+}
 
-    let darken = manifest.global_settings.darken_strength.min(100);
-    let blur = manifest.global_settings.blur_radius.min(100);
+/// 解析 `.swbg` 字节并写入 `bg/`，按包内参数出成品图
+pub fn import(bytes: &[u8]) -> Result<ImportSummary, String> {
+    let (mut archive, manifest) = load_manifest(bytes)?;
+
+    let global = &manifest.global_settings;
+    let darken = global.darken_strength.min(100);
+    let blur = global.blur_radius.min(100);
     let mut summary = ImportSummary {
         darken,
         blur,
+        quality: global.quality,
+        advanced_sync_mode: global.advanced_sync_mode,
         ..ImportSummary::default()
     };
 
-    for preset in &manifest.presets {
-        if !super::protocol::is_known_code(&preset.weather_code) {
+    // 与安卓一致：以 ZIP 里 `images/` 下的实际条目为准，编号取自条目文件名，
+    // 而不是按 manifest 里的 imageFile 去找条目
+    let entry_names: Vec<String> = archive
+        .file_names()
+        .filter_map(|name| name.strip_prefix(IMAGES_DIR).map(str::to_string))
+        .collect();
+    // 安卓只导入 manifest 里列出的编号
+    let preset_codes: Vec<&str> = manifest
+        .presets
+        .iter()
+        .map(|preset| preset.weather_code.as_str())
+        .collect();
+
+    for entry_name in entry_names {
+        let code = entry_name.split('.').next().unwrap_or("");
+        if !preset_codes.contains(&code) {
+            continue;
+        }
+        // 编号会拼进落盘文件名，仍然只认码表里的编号，挡住路径穿越
+        if !super::protocol::is_known_code(code) {
+            tracing::warn!("跳过 {}：未知天气编号", entry_name);
             summary.skipped += 1;
             continue;
         }
-        let Some(image) = read_entry(&mut archive, &preset.image_file)? else {
+
+        let Some(image) = read_entry(&mut archive, &format!("{IMAGES_DIR}{entry_name}"))? else {
             summary.skipped += 1;
             continue;
         };
         // 先解码校验，不支持的格式直接跳过，不写坏原件
         if super::edit::decode(&image).is_err() {
-            tracing::warn!("跳过 {}：{} 无法解码", preset.weather_code, preset.image_file);
+            tracing::warn!("跳过 {}：无法解码", entry_name);
             summary.skipped += 1;
             continue;
         }
 
-        let ext = if preset.image_format.is_empty() {
-            "png".to_string()
-        } else {
-            preset.image_format.clone()
-        };
-        super::store::save_source(&preset.weather_code, &ext, &image)
-            .map_err(|e| format!("保存 {} 原件失败: {}", preset.weather_code, e))?;
+        let ext = super::store::extension_of(&entry_name);
+        super::store::save_source(code, &ext, &image)
+            .map_err(|e| format!("保存 {} 原件失败: {}", code, e))?;
 
         let processed = super::edit::process(&image, darken, blur)?;
         let size = super::edit::decode(&processed).ok();
@@ -272,14 +356,16 @@ pub fn import(bytes: &[u8]) -> Result<ImportSummary, String> {
             .as_ref()
             .map(|img| (img.width, img.height))
             .unwrap_or((0, 0));
-        super::store::save_processed(
-            &preset.weather_code,
-            &preset.original_file_name,
-            width,
-            height,
-            &processed,
-        )
-        .map_err(|e| format!("写入 {} 成品图失败: {}", preset.weather_code, e))?;
+        // 显示名优先用 manifest 里的 originalFileName，与安卓导出的包对得上
+        let label = manifest
+            .presets
+            .iter()
+            .find(|preset| preset.weather_code == code)
+            .map(|preset| preset.original_file_name.as_str())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or(&entry_name);
+        super::store::save_processed(code, label, width, height, &processed)
+            .map_err(|e| format!("写入 {} 成品图失败: {}", code, e))?;
 
         summary.imported += 1;
     }
@@ -291,17 +377,21 @@ pub fn import(bytes: &[u8]) -> Result<ImportSummary, String> {
 }
 
 /// 通过系统保存对话框把 `.swbg` 写到用户选的位置
-pub async fn export_to_disk(darken: u32, blur: u32) -> Result<(), String> {
+pub async fn export_to_disk(
+    darken: u32,
+    blur: u32,
+    quality: u32,
+    advanced_sync_mode: bool,
+) -> Result<(), String> {
     use crate::astrobox::psys_host_v4::dialog;
 
-    let bytes = export(darken, blur)?;
-    let default_name = format!("simple-weather-bg.{FILE_EXTENSION}");
+    let bytes = export(darken, blur, quality, advanced_sync_mode)?;
 
     let session = dialog::save_file_start(dialog::FilterConfig {
         multiple: false,
         extensions: vec![FILE_EXTENSION.to_string()],
         default_directory: String::new(),
-        default_file_name: default_name,
+        default_file_name: DEFAULT_EXPORT_NAME.to_string(),
     })
     .await
     .map_err(|e| format!("打开保存对话框失败: {}", e))?;
@@ -341,4 +431,120 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn parse_manifest(bytes: &[u8]) -> Result<PresetManifest, String> {
+    serde_json::from_slice(bytes).map_err(|e| format!("解析 manifest 失败: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 安卓端 `BackgroundPresetManager` 导出的是 camelCase 字段，两端字段名必须逐字对上
+    #[test]
+    fn parses_android_camel_case_manifest() {
+        let json = r#"{
+            "appVersion": "2.4.4",
+            "exportTimestamp": 1791184200000,
+            "formatVersion": 1,
+            "globalSettings": {
+                "advancedSyncMode": true,
+                "blurRadius": 6,
+                "darkenStrength": 28,
+                "quality": 28
+            },
+            "metadata": {},
+            "presets": [
+                {
+                    "imageFile": "images/21.png",
+                    "imageFormat": "png",
+                    "originalFileName": "21.png",
+                    "settings": { "blurRadius": 6, "darkenStrength": 28, "quality": 28 },
+                    "weatherCode": "21",
+                    "weatherLabel": "晴-白天"
+                }
+            ]
+        }"#;
+
+        let manifest = parse_manifest(json.as_bytes()).expect("安卓端预设包应能解析");
+        assert_eq!(manifest.format_version, FORMAT_VERSION);
+        assert_eq!(manifest.global_settings.darken_strength, 28);
+        assert_eq!(manifest.global_settings.blur_radius, 6);
+        assert!(manifest.global_settings.advanced_sync_mode);
+        assert_eq!(manifest.presets.len(), 1);
+
+        let preset = &manifest.presets[0];
+        assert_eq!(preset.weather_code, "21");
+        assert_eq!(preset.weather_label, "晴-白天");
+        assert_eq!(preset.image_file, "images/21.png");
+        assert_eq!(preset.image_format, "png");
+        assert_eq!(preset.original_file_name, "21.png");
+        assert_eq!(preset.settings.darken_strength, 28);
+        assert_eq!(preset.settings.blur_radius, 6);
+    }
+
+    /// 只认安卓那套 camelCase，插件自己早期导出的 snake_case 包不再兼容
+    #[test]
+    fn rejects_snake_case_manifest() {
+        let json = r#"{
+            "formatVersion": 1,
+            "globalSettings": { "darken_strength": 12, "blur_radius": 3 },
+            "presets": [
+                {
+                    "weather_code": "62",
+                    "image_file": "images/62.png"
+                }
+            ]
+        }"#;
+
+        assert!(parse_manifest(json.as_bytes()).is_err());
+    }
+
+    /// 导出的字段名必须与安卓 Gson 的 @SerializedName 一致，否则对方导不回去
+    #[test]
+    fn exports_camel_case_fields() {
+        let manifest = PresetManifest {
+            format_version: FORMAT_VERSION,
+            app_version: "test".to_string(),
+            export_timestamp: 0,
+            metadata: BTreeMap::new(),
+            global_settings: GlobalSettings::default(),
+            presets: vec![PresetEntry {
+                weather_code: "21".to_string(),
+                weather_label: "晴-白天".to_string(),
+                image_file: "images/21.png".to_string(),
+                image_format: "png".to_string(),
+                original_file_name: "21.png".to_string(),
+                settings: PresetSettings::default(),
+            }],
+        };
+        let json = serde_json::to_string(&manifest).unwrap();
+
+        for key in [
+            "\"formatVersion\"",
+            "\"globalSettings\"",
+            "\"darkenStrength\"",
+            "\"blurRadius\"",
+            "\"advancedSyncMode\"",
+            "\"weatherCode\"",
+            "\"weatherLabel\"",
+            "\"imageFile\"",
+            "\"imageFormat\"",
+            "\"originalFileName\"",
+        ] {
+            assert!(json.contains(key), "导出缺少字段 {}", key);
+        }
+        for key in [
+            "\"darken_strength\"",
+            "\"blur_radius\"",
+            "\"weather_code\"",
+            "\"image_file\"",
+            "\"original_file_name\"",
+            "\"advanced_sync_mode\"",
+        ] {
+            assert!(!json.contains(key), "导出残留 snake_case 字段 {}", key);
+        }
+    }
+
 }

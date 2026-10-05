@@ -11,6 +11,7 @@
 
 use std::io::Cursor;
 
+use image_webp::WebPDecoder;
 use png::{Compression, Decoder, Encoder, Transformations};
 
 /// 手环端背景图的最大尺寸，对齐安卓 `ImageSyncManager.MAX_IMAGE_WIDTH/HEIGHT`
@@ -20,12 +21,13 @@ pub const MAX_IMAGE_HEIGHT: u32 = 514;
 /// 模糊迭代次数，对齐安卓 `repeat(3) { boxBlur(...) }`
 const BLUR_ITERATIONS: usize = 3;
 
-/// 缩略图尺寸，用于插件 UI 预览（data URI 体积可控）
-pub const THUMBNAIL_WIDTH: u32 = 160;
-pub const THUMBNAIL_HEIGHT: u32 = 190;
+/// 缩略图边长，用于插件 UI 的列表 / 卡片预览（data URI 体积可控）
+pub const THUMBNAIL_SIZE: u32 = 192;
 
 /// PNG 文件头，用于识别输入格式
 const PNG_MAGIC: [u8; 4] = [0x89, b'P', b'N', b'G'];
+/// JPEG 文件头（SOI + 段起始），用于识别输入格式
+const JPEG_MAGIC: [u8; 3] = [0xFF, 0xD8, 0xFF];
 
 /// 8 位 RGBA 像素，行优先
 pub struct Rgba {
@@ -66,15 +68,50 @@ impl Rgba {
     }
 }
 
-/// 解码 PNG 或 JPEG 为 RGBA8
+/// 解码 PNG / JPEG / WebP 为 RGBA8，覆盖安卓 `BitmapFactory` 常用的几种格式
 pub fn decode(bytes: &[u8]) -> Result<Rgba, String> {
     if bytes.starts_with(&PNG_MAGIC) {
         decode_png(bytes)
-    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+    } else if bytes.starts_with(&JPEG_MAGIC) {
         decode_jpeg(bytes)
+    } else if is_webp(bytes) {
+        decode_webp(bytes)
     } else {
-        Err("只支持 PNG 或 JPEG 图片".to_string())
+        Err("只支持 PNG / JPEG / WebP 图片".to_string())
     }
+}
+
+/// WebP 是 RIFF 容器，头 4 字节 `RIFF`、第 8-12 字节 `WEBP`
+fn is_webp(bytes: &[u8]) -> bool {
+    bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP"
+}
+
+/// 解码 WebP，动图取第一帧，与安卓 `BitmapFactory` 的行为一致
+pub fn decode_webp(bytes: &[u8]) -> Result<Rgba, String> {
+    let mut decoder = WebPDecoder::new(Cursor::new(bytes))
+        .map_err(|e| format!("WebP 解码失败: {}", e))?;
+    let (width, height) = decoder.dimensions();
+    let size = decoder
+        .output_buffer_size()
+        .ok_or_else(|| "WebP 尺寸过大".to_string())?;
+    let mut buf = vec![0u8; size];
+    decoder
+        .read_image(&mut buf)
+        .map_err(|e| format!("WebP 解码失败: {}", e))?;
+
+    let count = width as usize * height as usize;
+    let mut out = Rgba::new(width, height);
+    if decoder.has_alpha() {
+        for i in 0..count {
+            out.pixels[i * 4..i * 4 + 4].copy_from_slice(&buf[i * 4..i * 4 + 4]);
+        }
+    } else {
+        for i in 0..count {
+            out.pixels[i * 4..i * 4 + 3].copy_from_slice(&buf[i * 3..i * 3 + 3]);
+            out.pixels[i * 4 + 3] = 255;
+        }
+    }
+    Ok(out)
 }
 
 /// 解码 PNG
@@ -121,13 +158,24 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<Rgba, String> {
         .info()
         .ok_or_else(|| "无法读取 JPEG 信息".to_string())?;
 
-    let mut out = Rgba::new(info.width as u32, info.height as u32);
+    let width = info.width as u32;
+    let height = info.height as u32;
+    let count = width as usize * height as usize;
+    let mut out = Rgba::new(width, height);
     match info.pixel_format {
+        // jpeg-decoder 给的是紧密排列的 RGB24，要自己按 4 字节步长铺到 RGBA 上；
+        // 早期这里直接把 RGB 缓冲整段拷进 RGBA 缓冲，每行都会错位、颜色通道轮转，
+        // 表现就是导入后图片花掉、像素像重叠一样。
         jpeg_decoder::PixelFormat::RGB24 => {
-            let len = pixels.len().min(out.pixels.len());
-            out.pixels[..len].copy_from_slice(&pixels[..len]);
-            for px in out.pixels.chunks_exact_mut(4) {
-                px[3] = 255;
+            if pixels.len() < count * 3 {
+                return Err("JPEG 数据不完整".to_string());
+            }
+            for (i, px) in pixels.chunks_exact(3).take(count).enumerate() {
+                let dst = i * 4;
+                out.pixels[dst] = px[0];
+                out.pixels[dst + 1] = px[1];
+                out.pixels[dst + 2] = px[2];
+                out.pixels[dst + 3] = 255;
             }
         }
         jpeg_decoder::PixelFormat::L8 => {
@@ -215,6 +263,33 @@ pub fn scale_bilinear(image: &Rgba, new_width: u32, new_height: u32) -> Rgba {
             }
             out.set(x, y, rgba);
         }
+    }
+    out
+}
+
+/// 按「填满」取正方形：先等比放大到两边都不小于 `size`，再从中心裁出 `size`×`size`。
+/// 对应 CSS 的 `object-fit: cover`，等比不变形，多出来的部分裁掉。
+pub fn cover_square(image: &Rgba, size: u32) -> Rgba {
+    let size = size.max(1);
+    if image.width == 0 || image.height == 0 {
+        return Rgba::new(size, size);
+    }
+
+    let ratio =
+        (size as f32 / image.width as f32).max(size as f32 / image.height as f32);
+    // 用 ceil 保证放大后两边都不小于 size，下面裁剪才不会越界
+    let scaled_width = ((image.width as f32 * ratio).ceil() as u32).max(size);
+    let scaled_height = ((image.height as f32 * ratio).ceil() as u32).max(size);
+    let scaled = scale_bilinear(image, scaled_width, scaled_height);
+
+    let x0 = (scaled.width - size) / 2;
+    let y0 = (scaled.height - size) / 2;
+    let row_bytes = size as usize * 4;
+    let mut out = Rgba::new(size, size);
+    for y in 0..size as usize {
+        let src = ((y0 as usize + y) * scaled.width as usize + x0 as usize) * 4;
+        let dst = y * row_bytes;
+        out.pixels[dst..dst + row_bytes].copy_from_slice(&scaled.pixels[src..src + row_bytes]);
     }
     out
 }
@@ -332,11 +407,10 @@ pub fn process(bytes: &[u8], darken: u32, blur: u32) -> Result<Vec<u8>, String> 
     Ok(encode_png(&image))
 }
 
-/// 生成缩略图，供插件 UI 的 data URI 预览使用
-pub fn thumbnail(bytes: &[u8]) -> Result<Vec<u8>, String> {
+/// 解码后按「填满」裁成边长 `size` 的正方形，再编码 PNG
+pub fn square_cover(bytes: &[u8], size: u32) -> Result<Vec<u8>, String> {
     let image = decode(bytes)?;
-    let thumb = fit(&image, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT);
-    Ok(encode_png(&thumb))
+    Ok(encode_png(&cover_square(&image, size)))
 }
 
 /// PNG 字节转 data URI，宿主把 IMAGE 元素渲染成 `<img src>`，只有 data URI 可用
@@ -414,6 +488,64 @@ mod tests {
         assert_eq!(fitted.height, MAX_IMAGE_HEIGHT);
     }
 
+    /// 预览统一 1:1：宽图裁左右、高图裁上下，中间内容居中保留
+    #[test]
+    fn cover_square_center_crops() {
+        let mut wide = Rgba::new(4, 2);
+        for y in 0..2 {
+            wide.set(0, y, [255, 0, 0, 255]);
+            wide.set(1, y, [0, 255, 0, 255]);
+            wide.set(2, y, [0, 255, 0, 255]);
+            wide.set(3, y, [255, 0, 0, 255]);
+        }
+        let square = cover_square(&wide, 2);
+        assert_eq!((square.width, square.height), (2, 2));
+        for y in 0..2 {
+            for x in 0..2 {
+                assert_eq!(square.get(x, y), [0, 255, 0, 255], "宽图应只留中间两列");
+            }
+        }
+
+        let mut tall = Rgba::new(2, 4);
+        for x in 0..2 {
+            tall.set(x, 0, [255, 0, 0, 255]);
+            tall.set(x, 1, [0, 255, 0, 255]);
+            tall.set(x, 2, [0, 255, 0, 255]);
+            tall.set(x, 3, [255, 0, 0, 255]);
+        }
+        let square = cover_square(&tall, 2);
+        for y in 0..2 {
+            for x in 0..2 {
+                assert_eq!(square.get(x, y), [0, 255, 0, 255], "高图应只留中间两行");
+            }
+        }
+    }
+
+    /// 填满 = 等比放大后裁剪；如果直接拉伸成正方形，上下两端就会露出来
+    #[test]
+    fn cover_square_scales_without_stretching() {
+        let mut image = Rgba::new(4, 8);
+        for y in 0..8 {
+            let color = match y {
+                0 => [255, 0, 0, 255],
+                7 => [0, 0, 255, 255],
+                _ => [0, 255, 0, 255],
+            };
+            for x in 0..4 {
+                image.set(x, y, color);
+            }
+        }
+
+        // 放大 2 倍后居中裁 8x8，落在纯绿的中段
+        let square = cover_square(&image, 8);
+        assert_eq!((square.width, square.height), (8, 8));
+        for y in 0..8 {
+            for x in 0..8 {
+                assert_eq!(square.get(x, y), [0, 255, 0, 255], "不应把上下两端压进来");
+            }
+        }
+    }
+
     #[test]
     fn png_round_trip_preserves_pixels() {
         let image = gradient(32, 24);
@@ -423,4 +555,68 @@ mod tests {
         assert_eq!(decoded.height, 24);
         assert_eq!(decoded.pixels, image.pixels);
     }
+
+    /// 安卓端 `BitmapFactory` 支持 WebP，导出的预设包里可能有 .webp 原件
+    #[test]
+    fn webp_round_trip_preserves_pixels() {
+        use image_webp::{ColorType, WebPEncoder};
+
+        let image = gradient(32, 24);
+        let mut encoded = Vec::new();
+        WebPEncoder::new(&mut encoded)
+            .encode(&image.pixels, image.width, image.height, ColorType::Rgba8)
+            .unwrap();
+
+        assert!(super::is_webp(&encoded));
+        let decoded = decode(&encoded).unwrap();
+        assert_eq!(decoded.width, 32);
+        assert_eq!(decoded.height, 24);
+        assert_eq!(decoded.pixels, image.pixels);
+    }
+
+    /// 30x10 的样张，左中右分别是红/绿/蓝三块，用 Pillow 以 quality 95 编码
+    const SAMPLE_JPEG: &str = concat!(
+        "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAIBAQEBAQIBAQECAgICAgQDAgICAgUEBAMEBgUGBgYFBgYGBwkIBgcJBwYGCAsICQoKCgoKBggLDAsKDAkKCgr/",
+        "2wBDAQICAgICAgUDAwUKBwYHCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgr/wAARCAAKAB4DAREAAhEBAxEB/",
+        "8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAk",
+        "M2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2",
+        "t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQD",
+        "BAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVm",
+        "Z2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oA",
+        "DAMBAAIRAxEAPwD5fr8TP9eD6H+Bn/JLNL/7b/8Ao+Svlcy/32fy/JH+A/01/wDlJvPv+5X/ANQsMeZftu/8yx/2+/8AtCv7q+g9/wA1B/3Kf+7J+e+E",
+        "f/Mb/wBw/wD3IeC1/fB+zHoFf4jn+6h9D/Az/klml/8Abf8A9HyV8rmX++z+X5I/wH+mv/yk3n3/AHK/+oWGPMv23f8AmWP+33/2hX91fQe/5qD/",
+        "ALlP/dk/PfCP/mN/7h/+5DwWv74P2Y//2Q==",
+    );
+
+    /// JPEG 解出来是紧密排列的 RGB24，必须按 4 字节步长铺进 RGBA；
+    /// 早期整段拷贝会让每行错位、颜色通道轮转，端上选图后就是这个坏样。
+    #[test]
+    fn jpeg_decode_keeps_channel_order() {
+        use base64::Engine;
+
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(SAMPLE_JPEG)
+            .unwrap();
+        let image = decode(&bytes).unwrap();
+        assert_eq!((image.width, image.height), (30, 10));
+
+        // 三块纯色不会被「通道轮转」这种错误蒙混过去
+        for (x, want) in [(5u32, [220u8, 30, 40]), (15, [30, 200, 60]), (25, [40, 60, 220])] {
+            for y in [0u32, 5, 9] {
+                let px = image.get(x, y);
+                assert_eq!(px[3], 255, "第 {y} 行 alpha 应为不透明");
+                for c in 0..3 {
+                    let diff = (px[c] as i32 - want[c] as i32).abs();
+                    // JPEG 有损，只要求落在原色附近
+                    assert!(
+                        diff <= 8,
+                        "({x},{y}) 第 {c} 通道 {} 偏离期望 {} 太多",
+                        px[c],
+                        want[c]
+                    );
+                }
+            }
+        }
+    }
+
 }

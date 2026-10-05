@@ -37,14 +37,14 @@ pub struct UiState {
     pub bg_darken: u32,
     /// 模糊半径 0-100，对齐安卓 `bg_blur_radius`
     pub bg_blur: u32,
+    /// 对齐安卓 `bg_quality`。插件端出图固定 RGB_565，这个值只随预设包往来
+    pub bg_quality: u32,
+    /// 对齐安卓 `advanced_sync_mode`。插件端无对应功能，同样只随预设包往来
+    pub bg_advanced_sync_mode: bool,
     /// 已保存自定义背景图的天气编号
     pub bg_codes: Vec<String>,
     /// 说明页是否打开
     pub bg_guide: bool,
-    /// 灯箱当前打开的天气编号
-    pub bg_lightbox: Option<String>,
-    /// 灯箱里的原图 data URI
-    pub bg_preview_uri: String,
     /// 每个天气编号的缩略图 data URI，生成一次后复用，避免每次重绘都重编码
     pub bg_thumbs: HashMap<String, String>,
     /// 插件 UI 渲染区宽度（CSS 像素），0 表示还没查到。用于桌面/移动两套版式。
@@ -87,6 +87,9 @@ pub const CARD_MIN_COLUMN: u32 = 188;
 pub const CARD_COLUMN_GAP: u32 = 10;
 /// 排得下两列卡片才用卡片版式，否则退回列表
 pub const CARDS_MIN_WIDTH: u32 = CARD_MIN_COLUMN * 2 + CARD_COLUMN_GAP;
+
+/// 与安卓端 `bg_quality` 的默认值一致
+pub const DEFAULT_BG_QUALITY: u32 = 85;
 
 impl UiState {
     /// 容器排得下两列卡片就走卡片版式，否则列表。宽度未知（0）时按列表处理。
@@ -160,10 +163,10 @@ pub fn ui_state() -> &'static RwLock<UiState> {
             sync_card_backup: None,
             bg_darken: 0,
             bg_blur: 0,
+            bg_quality: DEFAULT_BG_QUALITY,
+            bg_advanced_sync_mode: true,
             bg_codes: Vec::new(),
             bg_guide: false,
-            bg_lightbox: None,
-            bg_preview_uri: String::new(),
             bg_thumbs: HashMap::new(),
             render_width: 0,
             render_height: 0,
@@ -195,6 +198,14 @@ struct StoredApiSettings {
     bg_darken: u32,
     #[serde(default)]
     bg_blur: u32,
+    #[serde(default = "default_bg_quality")]
+    bg_quality: u32,
+    #[serde(default = "default_bool_true")]
+    bg_advanced_sync_mode: bool,
+}
+
+fn default_bg_quality() -> u32 {
+    DEFAULT_BG_QUALITY
 }
 
 pub fn load_api_settings_once() {
@@ -234,6 +245,8 @@ pub fn load_api_settings_once() {
                 state.last_sync_location = stored.last_sync_location;
                 state.bg_darken = stored.bg_darken.min(100);
                 state.bg_blur = stored.bg_blur.min(100);
+                state.bg_quality = stored.bg_quality;
+                state.bg_advanced_sync_mode = stored.bg_advanced_sync_mode;
                 if state.selected_location.is_none() {
                     let first = state.recent_locations.first().cloned();
                     if let Some(first) = first {
@@ -275,6 +288,8 @@ pub fn save_all_settings() -> Result<(), String> {
         last_sync_location: state.last_sync_location.clone(),
         bg_darken: state.bg_darken,
         bg_blur: state.bg_blur,
+        bg_quality: state.bg_quality,
+        bg_advanced_sync_mode: state.bg_advanced_sync_mode,
     };
 
     let content = serde_json::to_string_pretty(&stored).map_err(|e| e.to_string())?;
