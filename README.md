@@ -51,7 +51,7 @@ api_settings.json          插件设置，含压暗与模糊
 ### .swbg 预设包
 
 `.swbg` 就是 ZIP，字段名与安卓 `BackgroundPresetManager` 的 `@SerializedName`
-一一对应，两端导出的包互相可导：
+一一对应，两端导出的包互相可导。导出默认文件名同样是 `weather_backgrounds.swbg`：
 
 ```text
 manifest.json
@@ -59,11 +59,16 @@ manifest.json
   globalSettings: { darkenStrength, blurRadius, quality, advancedSyncMode }
   presets[]: { weatherCode, weatherLabel, imageFile, imageFormat,
                originalFileName, settings: { darkenStrength, blurRadius, quality } }
-images/{code}.{ext}       原始图片，不是成品图
+images/{code}.{ext}       原始图片，不是成品图（条目名以包内实际命名为准）
 ```
 
-包里存的是原件加参数，所以来回导不会掉画质。`quality` 与
-`advancedSyncMode` 仅为兼容保留，插件端画质固定 RGB_565，不参与处理。
+包里存的是原件加参数，所以来回导不会掉画质。导入时按码表顺序读 `images/`
+下的条目，编号取自条目文件名；`globalSettings` 会覆盖插件本地的压暗 / 模糊。
+`quality` 与 `advancedSyncMode` 插件端不参与处理（画质固定 RGB_565），但会
+原样存下来，再次导出时带回，保证和安卓来回导不丢设置。
+
+解码支持的格式与安卓 `BitmapFactory` 的常用子集一致：PNG / JPEG / WebP
+（动图取第一帧）。打包里若有解码不了的原件，会在导入结果里计入「跳过」。
 
 ## 快速开始
 
