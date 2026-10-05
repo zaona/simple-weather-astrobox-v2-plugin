@@ -1,6 +1,7 @@
 use crate::astrobox::psys_host_v4::{register, ui as host_ui};
 use crate::exports::astrobox::psys_plugin_v4::{event, lifecycle};
 
+pub mod bg;
 pub mod device_report;
 pub mod logger;
 pub mod sleep;

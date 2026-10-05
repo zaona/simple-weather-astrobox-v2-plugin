@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 use tracing::{info, warn};
 
@@ -32,6 +33,25 @@ pub struct UiState {
     pub send_status: String,
     /// 发送开始时提前刷新了同步卡片，取消时用它还原 (last_sync_time_ms, last_sync_location)。
     pub sync_card_backup: Option<(u64, String)>,
+    /// 压暗强度 0-100，对齐安卓 `bg_darken_strength`
+    pub bg_darken: u32,
+    /// 模糊半径 0-100，对齐安卓 `bg_blur_radius`
+    pub bg_blur: u32,
+    /// 已保存自定义背景图的天气编号
+    pub bg_codes: Vec<String>,
+    /// 说明页是否打开
+    pub bg_guide: bool,
+    /// 灯箱当前打开的天气编号
+    pub bg_lightbox: Option<String>,
+    /// 灯箱里的原图 data URI
+    pub bg_preview_uri: String,
+    /// 每个天气编号的缩略图 data URI，生成一次后复用，避免每次重绘都重编码
+    pub bg_thumbs: HashMap<String, String>,
+    /// 插件 UI 渲染区宽度（CSS 像素），0 表示还没查到。用于桌面/移动两套版式。
+    pub render_width: u32,
+    pub render_height: u32,
+    /// 最近一次交互时间戳，用于决定要不要继续轮询窗口尺寸
+    pub last_ui_touch_ms: u64,
 }
 
 pub fn server_api_base() -> Result<&'static str, String> {
@@ -59,6 +79,20 @@ pub fn server_api_key() -> Result<&'static str, String> {
         .ok_or_else(|| "WEATHER_API_KEY 未配置".to_string())?;
 
     Ok(api_key)
+}
+
+/// 卡片网格每列的最小宽度，与 bg_page 里的 grid columns 保持一致
+pub const CARD_MIN_COLUMN: u32 = 188;
+/// 卡片网格的列间距
+pub const CARD_COLUMN_GAP: u32 = 10;
+/// 排得下两列卡片才用卡片版式，否则退回列表
+pub const CARDS_MIN_WIDTH: u32 = CARD_MIN_COLUMN * 2 + CARD_COLUMN_GAP;
+
+impl UiState {
+    /// 容器排得下两列卡片就走卡片版式，否则列表。宽度未知（0）时按列表处理。
+    pub fn is_compact_layout(&self) -> bool {
+        self.render_width < CARDS_MIN_WIDTH
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -123,6 +157,16 @@ pub fn ui_state() -> &'static RwLock<UiState> {
             send_generation: 0,
             send_status: String::new(),
             sync_card_backup: None,
+            bg_darken: 0,
+            bg_blur: 0,
+            bg_codes: Vec::new(),
+            bg_guide: false,
+            bg_lightbox: None,
+            bg_preview_uri: String::new(),
+            bg_thumbs: HashMap::new(),
+            render_width: 0,
+            render_height: 0,
+            last_ui_touch_ms: 0,
         };
         RwLock::new(state)
     })
@@ -146,6 +190,10 @@ struct StoredApiSettings {
     last_sync_time_ms: u64,
     #[serde(default)]
     last_sync_location: String,
+    #[serde(default)]
+    bg_darken: u32,
+    #[serde(default)]
+    bg_blur: u32,
 }
 
 pub fn load_api_settings_once() {
@@ -183,6 +231,8 @@ pub fn load_api_settings_once() {
                 state.recent_locations = stored.recent_locations;
                 state.last_sync_time_ms = stored.last_sync_time_ms;
                 state.last_sync_location = stored.last_sync_location;
+                state.bg_darken = stored.bg_darken.min(100);
+                state.bg_blur = stored.bg_blur.min(100);
                 if state.selected_location.is_none() {
                     let first = state.recent_locations.first().cloned();
                     if let Some(first) = first {
@@ -222,6 +272,8 @@ pub fn save_all_settings() -> Result<(), String> {
         recent_locations: state.recent_locations.clone(),
         last_sync_time_ms: state.last_sync_time_ms,
         last_sync_location: state.last_sync_location.clone(),
+        bg_darken: state.bg_darken,
+        bg_blur: state.bg_blur,
     };
 
     let content = serde_json::to_string_pretty(&stored).map_err(|e| e.to_string())?;
