@@ -197,50 +197,87 @@ fn build_guide() -> ui::Element {
         ),
     ];
 
-    let mut card = build_card().child(
+    // 顶部返回栏与「位置设置」子页保持一致：40 的圆形返回键 + 17 号标题
+    let back_btn = ui::Element::new(ui::ElementType::Button, None)
+        .without_default_styles()
+        .on(ui::Event::Click, BG_CLOSE_GUIDE_EVENT)
+        .width(40)
+        .height(40)
+        .radius(999)
+        .bg(CARD_INNER_BG)
+        .flex()
+        .align_center()
+        .justify_center()
+        .child(
+            ui::Element::new(ui::ElementType::Svg, Some(&icons::back_arrow_svg()))
+                .width(20)
+                .height(20),
+        );
+
+    let top_bar = ui::Element::new(ui::ElementType::Div, None)
+        .flex()
+        .flex_direction(ui::FlexDirection::Row)
+        .align_center()
+        .gap(8)
+        .margin_bottom(8)
+        .child(back_btn)
+        .child(ui::Element::new(ui::ElementType::P, Some("使用说明")).size(17));
+
+    // 条目列表沿用位置历史 / 搜索结果那套容器与行距
+    let mut list = ui::Element::new(ui::ElementType::Div, None)
+        .flex()
+        .flex_direction(ui::FlexDirection::Column)
+        .width_full()
+        .bg(CARD_BG)
+        .radius(18)
+        .padding_left(12)
+        .padding_right(12)
+        .padding_top(4)
+        .padding_bottom(4);
+
+    for (title, body) in sections {
+        list = list.child(
+            ui::Element::new(ui::ElementType::Div, None)
+                .flex()
+                .flex_direction(ui::FlexDirection::Column)
+                .width_full()
+                .padding_top(10)
+                .padding_bottom(10)
+                .gap(2)
+                .child(ui::Element::new(ui::ElementType::P, Some(title)).size(15))
+                .child(
+                    ui::Element::new(ui::ElementType::P, Some(body))
+                        .size(13)
+                        .text_color("#888888"),
+                ),
+        );
+    }
+
+    // 完整文档入口也做成同样的一行，不再单独一颗按钮
+    list = list.child(
         ui::Element::new(ui::ElementType::Div, None)
             .flex()
             .flex_direction(ui::FlexDirection::Row)
             .align_center()
+            .justify_center()
             .width_full()
-            .gap(10)
+            .padding_top(10)
+            .padding_bottom(10)
+            .on(ui::Event::Click, OPEN_HELP_DOC_EVENT)
             .child(
-                ui::Element::new(ui::ElementType::Button, None)
-                    .without_default_styles()
-                    .on(ui::Event::Click, BG_CLOSE_GUIDE_EVENT)
-                    .radius(999)
-                    .width(32)
-                    .height(32)
-                    .bg(CARD_INNER_BG)
-                    .flex()
-                    .align_center()
-                    .justify_center()
-                    .child(
-                        ui::Element::new(ui::ElementType::Svg, Some(&icons::back_arrow_svg()))
-                            .width(18)
-                            .height(18)
-                            .text_color("#FFFFFF"),
-                    ),
-            )
-            .child(ui::Element::new(ui::ElementType::P, Some("使用说明")).size(15)),
+                ui::Element::new(ui::ElementType::P, Some("打开完整文档"))
+                    .size(15)
+                    .text_color(ACCENT),
+            ),
     );
 
-    for (title, body) in sections {
-        card = card
-            .child(ui::Element::new(ui::ElementType::P, Some(title)).size(14))
-            .child(
-                ui::Element::new(ui::ElementType::P, Some(body))
-                    .size(12)
-                    .text_color(MUTED),
-            );
-    }
-
-    card.child(build_small_button(
-        "打开完整文档",
-        OPEN_HELP_DOC_EVENT,
-        CARD_INNER_BG,
-        ACCENT,
-    ))
+    ui::Element::new(ui::ElementType::Div, None)
+        .flex()
+        .flex_direction(ui::FlexDirection::Column)
+        .width_full()
+        .gap(8)
+        .child(top_bar)
+        .child(list)
 }
 
 /// 传输状态：文案对齐手环端 `image-service.js` 的 message
