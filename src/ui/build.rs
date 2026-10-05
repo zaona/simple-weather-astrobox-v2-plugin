@@ -24,12 +24,18 @@ pub fn build_main_ui() -> ui::Element {
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
+    let compact = state.is_compact_layout();
+
     // 页签条和内容的左右留白分开控制：窄屏时页签几乎贴边，把宽度全让给三个页签
-    let container = ui::Element::new(ui::ElementType::Div, None)
+    let tabs_padding = if compact { 2 } else { 20 };
+    let content_padding = if compact { 10 } else { 20 };
+
+    let mut root = ui::Element::new(ui::ElementType::Div, None)
         .flex()
         .flex_direction(ui::FlexDirection::Column)
         .width_full()
-        .padding(20);
+        .padding_top(if compact { 10 } else { 20 })
+        .padding_bottom(if compact { 10 } else { 20 });
 
     let tabs = build_tabs(&state);
     let content = match state.current_tab {
@@ -38,7 +44,22 @@ pub fn build_main_ui() -> ui::Element {
         MainTab::Settings => build_settings_tab(&state),
     };
 
-    container.child(tabs).child(content)
+    let tabs_bar = ui::Element::new(ui::ElementType::Div, None)
+        .width_full()
+        .padding_left(tabs_padding)
+        .padding_right(tabs_padding)
+        .child(tabs);
+
+    let content_area = ui::Element::new(ui::ElementType::Div, None)
+        .flex()
+        .flex_direction(ui::FlexDirection::Column)
+        .width_full()
+        .padding_left(content_padding)
+        .padding_right(content_padding)
+        .child(content);
+
+    root = root.child(tabs_bar).child(content_area);
+    root
 }
 
 pub fn render_sync_card(card_id: &str) {
@@ -61,18 +82,22 @@ fn build_tabs(state: &UiState) -> ui::Element {
         .justify_center()
         .margin_bottom(20);
 
+    let tabs_pad = if state.is_compact_layout() { 3 } else { 4 };
     let tabs_list = ui::Element::new(ui::ElementType::TabsList, None)
         .flex()
         .bg("#1E1E1F")
         .radius(999)
-        .padding(4)
-        .gap(4);
+        .padding(tabs_pad)
+        .gap(tabs_pad);
+
+    let compact = state.is_compact_layout();
 
     let paste_trigger = build_tab_trigger(
         "同步数据",
         icons::send_tab_svg(),
         state.current_tab == MainTab::PasteData,
         TAB_PASTE_EVENT,
+        compact,
     );
 
     let background_trigger = build_tab_trigger(
@@ -80,6 +105,7 @@ fn build_tabs(state: &UiState) -> ui::Element {
         icons::image_tab_svg(),
         state.current_tab == MainTab::Background,
         TAB_BACKGROUND_EVENT,
+        compact,
     );
 
     let settings_trigger = build_tab_trigger(
@@ -87,6 +113,7 @@ fn build_tabs(state: &UiState) -> ui::Element {
         icons::api_tab_svg(),
         state.current_tab == MainTab::Settings,
         TAB_SETTINGS_EVENT,
+        compact,
     );
 
     tabs_root.child(
@@ -687,26 +714,38 @@ fn build_more_link_icon() -> ui::Element {
 }
 
 
-fn build_tab_trigger(label: &str, icon_svg: String, is_active: bool, event_id: &str) -> ui::Element {
-    let icon = ui::Element::new(ui::ElementType::Svg, Some(&icon_svg))
-        .width(22)
-        .height(22);
+fn build_tab_trigger(
+    label: &str,
+    icon_svg: String,
+    is_active: bool,
+    event_id: &str,
+    compact: bool,
+) -> ui::Element {
+    let icon_size = if compact { 16 } else { 22 };
+    let pad_x = if compact { 8 } else { 14 };
+    let pad_y = if compact { 8 } else { 10 };
+    let font_size = if compact { 13 } else { 14 };
+    let gap = if compact { 4 } else { 5 };
 
-    let text = ui::Element::new(ui::ElementType::Span, Some(label)).size(14);
+    let icon = ui::Element::new(ui::ElementType::Svg, Some(&icon_svg))
+        .width(icon_size)
+        .height(icon_size);
+
+    let text = ui::Element::new(ui::ElementType::Span, Some(label)).size(font_size);
 
     ui::Element::new(ui::ElementType::TabsTrigger, None)
         .without_default_styles()
         .on(ui::Event::Click, event_id)
         .radius(999)
-        .padding_top(10)
-        .padding_bottom(10)
-        .padding_left(14)
-        .padding_right(14)
+        .padding_top(pad_y)
+        .padding_bottom(pad_y)
+        .padding_left(pad_x)
+        .padding_right(pad_x)
         .bg(if is_active { "#2A2A2A" } else { "#1E1E1F" })
         .text_color(if is_active { "#FFFFFF" } else { "#BBBBBB" })
         .flex()
         .align_center()
-        .gap(5)
+        .gap(gap)
         .child(icon)
         .child(text)
 }

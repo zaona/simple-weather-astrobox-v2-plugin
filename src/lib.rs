@@ -27,13 +27,29 @@ impl event::Guest for MyPlugin {
 
         match event_type {
             event::EventType::InterconnectMessage => {
-                ui::handle_interconnect_message(&event_payload);
+                if let Some(reply) = bg::handle_message(&event_payload) {
+                    ui::on_background_transfer_committed(&reply);
+                    bg::send_reply(reply).await;
+                } else {
+                    ui::handle_interconnect_message(&event_payload);
+                }
             }
             event::EventType::Timer => {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&event_payload) {
                     if let Some(payload) = json.get("payload").and_then(|v| v.as_str()) {
                         if device_report::is_report_timer_payload(payload) {
                             device_report::report_connected_device().await;
+                        } else if bg::is_register_timer_payload(payload) {
+                            bg::register_recv().await;
+                        } else if bg::is_apply_timer_payload(payload) {
+                            if let Some(code) = bg::apply_next() {
+                                ui::refresh_background_code(&code);
+                                ui::build::rerender_main_ui();
+                            }
+                        } else if bg::is_render_size_poll_payload(payload) {
+                            if ui::event_handler::poll_render_size().await {
+                                bg::schedule_render_size_poll();
+                            }
                         } else if !sleep::handle_timer_payload(payload) {
                             crate::ui::event_handler::handle_timer_payload(payload);
                         }
@@ -60,6 +76,8 @@ impl event::Guest for MyPlugin {
     }
 
     async fn on_ui_render(element_id: String) {
+        ui::event_handler::touch_ui();
+        ui::refresh_render_size().await;
         ui::render_main_ui(&element_id);
     }
 
@@ -94,6 +112,7 @@ impl lifecycle::Guest for MyPlugin {
         tracing::info!("register card result: {:?}", result);
 
         device_report::schedule_report();
+        bg::schedule_register();
     }
 }
 

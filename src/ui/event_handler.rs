@@ -54,6 +54,7 @@ pub async fn ui_event_processor(event_type: ui::Event, event_id: &str, event_pay
     if !is_high_frequency_input_event(event_id) {
         tracing::info!("UI Event: type={:?}, id={}", event_type, event_id);
     }
+    touch_ui();
 
     match event_id {
         SEND_BUTTON_EVENT => {
@@ -104,6 +105,7 @@ pub async fn ui_event_processor(event_type: ui::Event, event_id: &str, event_pay
             if entered {
                 ensure_background_thumbs();
             }
+            refresh_render_size().await;
             crate::ui::build::rerender_main_ui();
         }
         BG_DARKEN_SLIDER_EVENT => apply_background_slider(true, parse_event_value(event_payload)),
@@ -596,6 +598,74 @@ fn cache_thumbnail(code: &str, darken: u32, blur: u32) {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.bg_thumbs.insert(code.to_string(), uri);
     }
+}
+
+pub async fn refresh_render_size() {
+    let size = crate::astrobox::psys_host_v4::ui::get_render_size().await;
+    touch_ui();
+    apply_render_size(size.width, size.height);
+    crate::bg::schedule_render_size_poll();
+}
+
+/// 记一次交互，让尺寸轮询知道用户还在这个页面上
+pub fn touch_ui() {
+    let mut state = ui_state()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    state.last_ui_touch_ms = now_ms();
+}
+
+/// 窗口尺寸轮询：宿主那边由 ResizeObserver 实时更新，但插件只在事件里主动问，
+/// 所以交互后的短时间内轮询一下，窗口拖窄/拉宽能立刻换版式。
+///
+/// 返回是否还要排下一次；调用方负责重新排定时器。
+pub async fn poll_render_size() -> bool {
+    const POLL_WINDOW_MS: u64 = 30_000;
+
+    let recently_active = {
+        let state = ui_state()
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        now_ms().saturating_sub(state.last_ui_touch_ms) < POLL_WINDOW_MS
+    };
+    if !recently_active {
+        tracing::debug!("交互已停止，停止窗口尺寸轮询");
+        return false;
+    }
+
+    let size = crate::astrobox::psys_host_v4::ui::get_render_size().await;
+    apply_render_size(size.width, size.height)
+}
+
+/// 记录尺寸并在变化时重绘，返回尺寸是否变了
+fn apply_render_size(width: u32, height: u32) -> bool {
+    let changed = {
+        let mut state = ui_state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.render_width == width && state.render_height == height {
+            false
+        } else {
+            tracing::info!(
+                "渲染区尺寸 {}x{}，版式={}",
+                width,
+                height,
+                if width < CARDS_MIN_WIDTH {
+                    "列表"
+                } else {
+                    "卡片"
+                }
+            );
+            state.render_width = width;
+            state.render_height = height;
+            true
+        }
+    };
+
+    if changed {
+        crate::ui::build::rerender_main_ui();
+    }
+    changed
 }
 
 fn payload_has_enter(payload: &str) -> bool {
