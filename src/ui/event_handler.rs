@@ -52,7 +52,6 @@ pub async fn ui_event_processor(event_type: ui::Event, event_id: &str, event_pay
     if !is_high_frequency_input_event(event_id) {
         tracing::info!("UI Event: type={:?}, id={}", event_type, event_id);
     }
-    touch_ui();
 
     match event_id {
         SEND_BUTTON_EVENT => {
@@ -103,7 +102,6 @@ pub async fn ui_event_processor(event_type: ui::Event, event_id: &str, event_pay
             if entered {
                 ensure_background_thumbs();
             }
-            refresh_render_size().await;
             crate::ui::build::rerender_main_ui();
         }
         BG_DARKEN_SLIDER_EVENT => apply_background_slider(true, parse_event_value(event_payload)),
@@ -346,6 +344,18 @@ async fn pick_background_image(code: &str) {
         return;
     }
 
+    // 事件可能因冒泡或连点重复派发，这里保证同时只开一个系统选择器
+    {
+        let mut state = ui_state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.bg_pick_in_progress {
+            tracing::info!("选图进行中，忽略重复的选图请求: {}", code);
+            return;
+        }
+        state.bg_pick_in_progress = true;
+    }
+
     let (darken, blur) = {
         let state = ui_state()
             .read()
@@ -353,7 +363,14 @@ async fn pick_background_image(code: &str) {
         (state.bg_darken, state.bg_blur)
     };
 
-    match crate::bg::pick_and_import(code, darken, blur).await {
+    let outcome = crate::bg::pick_and_import(code, darken, blur).await;
+
+    ui_state()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .bg_pick_in_progress = false;
+
+    match outcome {
         Ok(Some(_name)) => {
             refresh_background_code(code);
             crate::ui::build::rerender_main_ui();
@@ -575,74 +592,6 @@ fn cache_thumbnail(code: &str, darken: u32, blur: u32) {
     }
 }
 
-pub async fn refresh_render_size() {
-    let size = crate::astrobox::psys_host_v4::ui::get_render_size().await;
-    touch_ui();
-    apply_render_size(size.width, size.height);
-    crate::bg::schedule_render_size_poll();
-}
-
-/// 记一次交互，让尺寸轮询知道用户还在这个页面上
-pub fn touch_ui() {
-    let mut state = ui_state()
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    state.last_ui_touch_ms = now_ms();
-}
-
-/// 窗口尺寸轮询：宿主那边由 ResizeObserver 实时更新，但插件只在事件里主动问，
-/// 所以交互后的短时间内轮询一下，窗口拖窄/拉宽能立刻换版式。
-///
-/// 返回是否还要排下一次；调用方负责重新排定时器。
-pub async fn poll_render_size() -> bool {
-    const POLL_WINDOW_MS: u64 = 30_000;
-
-    let recently_active = {
-        let state = ui_state()
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        now_ms().saturating_sub(state.last_ui_touch_ms) < POLL_WINDOW_MS
-    };
-    if !recently_active {
-        tracing::debug!("交互已停止，停止窗口尺寸轮询");
-        return false;
-    }
-
-    let size = crate::astrobox::psys_host_v4::ui::get_render_size().await;
-    apply_render_size(size.width, size.height)
-}
-
-/// 记录尺寸并在变化时重绘，返回尺寸是否变了
-fn apply_render_size(width: u32, height: u32) -> bool {
-    let changed = {
-        let mut state = ui_state()
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if state.render_width == width && state.render_height == height {
-            false
-        } else {
-            tracing::info!(
-                "渲染区尺寸 {}x{}，版式={}",
-                width,
-                height,
-                if width < CARDS_MIN_WIDTH {
-                    "列表"
-                } else {
-                    "卡片"
-                }
-            );
-            state.render_width = width;
-            state.render_height = height;
-            true
-        }
-    };
-
-    if changed {
-        crate::ui::build::rerender_main_ui();
-    }
-    changed
-}
-
 fn payload_has_enter(payload: &str) -> bool {
     payload.contains("\"key\":\"Enter\"")
         || payload.contains("\"code\":\"Enter\"")
@@ -656,6 +605,21 @@ fn is_high_frequency_input_event(event_id: &str) -> bool {
         event_id,
         SEARCH_INPUT_CHANGE_EVENT | SEARCH_INPUT_SUBMIT_EVENT
     )
+}
+
+/// 问一次宿主的渲染宽度并记录，返回是否跨过了紧凑档位
+pub async fn sync_render_size() -> bool {
+    let width = crate::astrobox::psys_host_v4::ui::get_render_size().await.width;
+    let mut state = ui_state()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if state.render_width == width {
+        return false;
+    }
+    let crossed = (state.render_width < COMPACT_MAX_WIDTH) != (width < COMPACT_MAX_WIDTH);
+    tracing::info!("渲染区宽度 {}px，{}", width, if width < COMPACT_MAX_WIDTH { "紧凑档" } else { "宽屏档" });
+    state.render_width = width;
+    crossed
 }
 
 fn parse_event_value(payload: &str) -> String {

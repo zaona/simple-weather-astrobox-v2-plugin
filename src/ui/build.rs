@@ -24,18 +24,20 @@ pub fn build_main_ui() -> ui::Element {
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
+    // 页面最外层留白：窄屏收窄，四个方向统一由根容器控制。
+    // 紧凑档左右先试 0，让内容占满整个宽度。
     let compact = state.is_compact_layout();
-
-    // 页签条和内容的左右留白分开控制：窄屏时页签几乎贴边，把宽度全让给三个页签
-    let tabs_padding = if compact { 2 } else { 20 };
-    let content_padding = if compact { 10 } else { 20 };
+    let page_padding = if compact { 10 } else { 20 };
+    let page_padding_side = if compact { 0 } else { page_padding };
 
     let mut root = ui::Element::new(ui::ElementType::Div, None)
         .flex()
         .flex_direction(ui::FlexDirection::Column)
         .width_full()
-        .padding_top(if compact { 10 } else { 20 })
-        .padding_bottom(if compact { 10 } else { 20 });
+        .padding_top(page_padding)
+        .padding_bottom(page_padding)
+        .padding_right(page_padding_side)
+        .padding_left(page_padding_side);
 
     let tabs = build_tabs(&state);
     let content = match state.current_tab {
@@ -44,21 +46,7 @@ pub fn build_main_ui() -> ui::Element {
         MainTab::Settings => build_settings_tab(&state),
     };
 
-    let tabs_bar = ui::Element::new(ui::ElementType::Div, None)
-        .width_full()
-        .padding_left(tabs_padding)
-        .padding_right(tabs_padding)
-        .child(tabs);
-
-    let content_area = ui::Element::new(ui::ElementType::Div, None)
-        .flex()
-        .flex_direction(ui::FlexDirection::Column)
-        .width_full()
-        .padding_left(content_padding)
-        .padding_right(content_padding)
-        .child(content);
-
-    root = root.child(tabs_bar).child(content_area);
+    root = root.child(tabs).child(content);
     root
 }
 
@@ -82,15 +70,14 @@ fn build_tabs(state: &UiState) -> ui::Element {
         .justify_center()
         .margin_bottom(20);
 
-    let tabs_pad = if state.is_compact_layout() { 3 } else { 4 };
+    let compact = state.is_compact_layout();
+    let tabs_pad = if compact { 3 } else { 4 };
     let tabs_list = ui::Element::new(ui::ElementType::TabsList, None)
         .flex()
         .bg("#1E1E1F")
         .radius(999)
         .padding(tabs_pad)
         .gap(tabs_pad);
-
-    let compact = state.is_compact_layout();
 
     let paste_trigger = build_tab_trigger(
         "同步数据",
@@ -698,7 +685,8 @@ fn build_settings_card(
     row
 }
 
-fn build_section_title(text: &str) -> ui::Element {
+/// 小标题：设置页与背景图页共用同一份样式（13 号、#888888、左边距 12）
+pub(super) fn build_section_title(text: &str) -> ui::Element {
     ui::Element::new(ui::ElementType::P, Some(text))
         .size(13)
         .text_color("#888888")
@@ -721,17 +709,18 @@ fn build_tab_trigger(
     event_id: &str,
     compact: bool,
 ) -> ui::Element {
-    let icon_size = if compact { 16 } else { 22 };
-    let pad_x = if compact { 8 } else { 14 };
-    let pad_y = if compact { 8 } else { 10 };
-    let font_size = if compact { 13 } else { 14 };
-    let gap = if compact { 4 } else { 5 };
+    // 图标 / 左右内边距 / 上下内边距 / 字号 / 图标与文字间距
+    let (icon_size, pad_x, pad_y, font, gap) = if compact {
+        (16, 8, 8, 13, 4)
+    } else {
+        (22, 14, 10, 14, 5)
+    };
 
     let icon = ui::Element::new(ui::ElementType::Svg, Some(&icon_svg))
         .width(icon_size)
         .height(icon_size);
 
-    let text = ui::Element::new(ui::ElementType::Span, Some(label)).size(font_size);
+    let text = ui::Element::new(ui::ElementType::Span, Some(label)).size(font);
 
     ui::Element::new(ui::ElementType::TabsTrigger, None)
         .without_default_styles()

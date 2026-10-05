@@ -46,10 +46,6 @@ impl event::Guest for MyPlugin {
                                 ui::refresh_background_code(&code);
                                 ui::build::rerender_main_ui();
                             }
-                        } else if bg::is_render_size_poll_payload(payload) {
-                            if ui::event_handler::poll_render_size().await {
-                                bg::schedule_render_size_poll();
-                            }
                         } else if !sleep::handle_timer_payload(payload) {
                             crate::ui::event_handler::handle_timer_payload(payload);
                         }
@@ -76,8 +72,8 @@ impl event::Guest for MyPlugin {
     }
 
     async fn on_ui_render(element_id: String) {
-        ui::event_handler::touch_ui();
-        ui::refresh_render_size().await;
+        // 宿主每次渲染插件页面时同步一次渲染宽度，页面留白与页签尺寸按它选档
+        ui::event_handler::sync_render_size().await;
         ui::render_main_ui(&element_id);
     }
 

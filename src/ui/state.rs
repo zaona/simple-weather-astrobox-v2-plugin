@@ -41,17 +41,16 @@ pub struct UiState {
     pub bg_quality: u32,
     /// 对齐安卓 `advanced_sync_mode`。插件端无对应功能，同样只随预设包往来
     pub bg_advanced_sync_mode: bool,
+    /// 选图对话框是否正在进行，挡住重复派发的选图事件
+    pub bg_pick_in_progress: bool,
     /// 已保存自定义背景图的天气编号
     pub bg_codes: Vec<String>,
     /// 说明页是否打开
     pub bg_guide: bool,
     /// 每个天气编号的缩略图 data URI，生成一次后复用，避免每次重绘都重编码
     pub bg_thumbs: HashMap<String, String>,
-    /// 插件 UI 渲染区宽度（CSS 像素），0 表示还没查到。用于桌面/移动两套版式。
+    /// 宿主渲染区宽度（CSS 像素），0 表示还没问过。用来给页面留白和页签选档
     pub render_width: u32,
-    pub render_height: u32,
-    /// 最近一次交互时间戳，用于决定要不要继续轮询窗口尺寸
-    pub last_ui_touch_ms: u64,
 }
 
 pub fn server_api_base() -> Result<&'static str, String> {
@@ -81,20 +80,20 @@ pub fn server_api_key() -> Result<&'static str, String> {
     Ok(api_key)
 }
 
-/// 卡片网格每列的最小宽度，与 bg_page 里的 grid columns 保持一致
-pub const CARD_MIN_COLUMN: u32 = 188;
-/// 卡片网格的列间距
-pub const CARD_COLUMN_GAP: u32 = 10;
-/// 排得下两列卡片才用卡片版式，否则退回列表
-pub const CARDS_MIN_WIDTH: u32 = CARD_MIN_COLUMN * 2 + CARD_COLUMN_GAP;
+/// 背景图行式条目每列的最小宽度；排不下两列时自然退回单列，条目本身不变
+pub const ROW_MIN_COLUMN: u32 = 300;
+/// 行卡片之间的间距，与设置列表的卡片间距保持一致
+pub const ROW_COLUMN_GAP: u32 = 8;
+/// 窄于这个宽度就换紧凑档：页面留白更小、页签更紧，三个页签才放得下
+pub const COMPACT_MAX_WIDTH: u32 = 608;
 
 /// 与安卓端 `bg_quality` 的默认值一致
 pub const DEFAULT_BG_QUALITY: u32 = 85;
 
 impl UiState {
-    /// 容器排得下两列卡片就走卡片版式，否则列表。宽度未知（0）时按列表处理。
+    /// 宽度未知（0）时按紧凑处理，首帧不会溢出
     pub fn is_compact_layout(&self) -> bool {
-        self.render_width < CARDS_MIN_WIDTH
+        self.render_width < COMPACT_MAX_WIDTH
     }
 }
 
@@ -165,12 +164,11 @@ pub fn ui_state() -> &'static RwLock<UiState> {
             bg_blur: 0,
             bg_quality: DEFAULT_BG_QUALITY,
             bg_advanced_sync_mode: true,
+            bg_pick_in_progress: false,
             bg_codes: Vec::new(),
             bg_guide: false,
             bg_thumbs: HashMap::new(),
             render_width: 0,
-            render_height: 0,
-            last_ui_touch_ms: 0,
         };
         RwLock::new(state)
     })

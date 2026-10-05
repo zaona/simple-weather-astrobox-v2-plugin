@@ -27,12 +27,6 @@ const REGISTER_TIMER_PAYLOAD: &str = "bg_register";
 /// 滑块改动后逐张重算的定时器 payload
 const APPLY_TIMER_PAYLOAD: &str = "bg_apply";
 
-/// 窗口尺寸轮询的定时器 payload
-const RENDER_SIZE_POLL_PAYLOAD: &str = "bg_size_poll";
-
-/// 轮询间隔：交互停止后 30 秒内每 2 秒问一次容器宽度
-const RENDER_SIZE_POLL_MS: u64 = 2000;
-
 /// 一次只重算一张，避免十二张一起跑把界面卡住
 const APPLY_INTERVAL_MS: u64 = 60;
 
@@ -62,15 +56,6 @@ static APPLY_QUEUE: Mutex<ApplyQueue> = Mutex::new(ApplyQueue {
 
 pub fn is_apply_timer_payload(payload: &str) -> bool {
     payload == APPLY_TIMER_PAYLOAD
-}
-
-pub fn is_render_size_poll_payload(payload: &str) -> bool {
-    payload == RENDER_SIZE_POLL_PAYLOAD
-}
-
-/// 排下一次窗口尺寸轮询
-pub fn schedule_render_size_poll() {
-    timer::set_timeout(RENDER_SIZE_POLL_MS, RENDER_SIZE_POLL_PAYLOAD);
 }
 
 /// 安排一次全量重算。已经在跑就并入当前这批参数。

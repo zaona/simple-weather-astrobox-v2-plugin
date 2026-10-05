@@ -1,9 +1,7 @@
 //! 背景图页签：传输状态、图片处理滑块、12 个天气编号的背景图管理。
 //!
-//! 两套版式，按宿主渲染区宽度分派（见 `UiState::is_compact_layout`）：
-//!
-//! - 移动端（<640px）：单列列表，右侧一颗切换/加号按钮
-//! - 桌面端（≥640px）：自适应列网格，每张一个方形预览图卡片
+//! 背景图列表只有一套行式条目（缩略图 + 两行文字 + 右侧动作按钮），
+//! 按渲染区宽度自适应列数：窄屏一列，宽屏多列，条目本身完全一致。
 //!
 //! 交互对齐安卓 `BackgroundImageItem`，并按端上交互做了调整：
 //!
@@ -22,15 +20,16 @@ use crate::astrobox::psys_host_v4::ui;
 /// 滑块量程，与安卓 `valueRange = 0f..100f` 一致
 const SLIDER_MAX: u32 = 100;
 const ROW_THUMB_SIZE: u32 = 40;
-/// 缩略图统一 1:1，图片按填满（居中裁剪）显示，不做拉伸
-const CARD_THUMB_SIZE: u32 = 168;
+/// 说明 / 导入 / 导出三个条目的最小列宽，和列表一样按宽度自动决定列数
+const ACTION_MIN_COLUMN: u32 = 180;
+/// 压暗 / 模糊两张卡片的最小列宽，排不下两张时自然叠成一列
+const EDIT_CARD_MIN_COLUMN: u32 = 240;
 
 /// 传输状态那行的固定高度（单行 13px 文字）
 const STATUS_LINE_HEIGHT: u32 = 18;
 
 const CARD_BG: &str = "#1E1E1F";
 const CARD_INNER_BG: &str = "#2A2A2A";
-const CARD_ITEM_BG: &str = "#232325";
 const MUTED: &str = "#8E8E93";
 const FAINT: &str = "#48484A";
 const ACCENT: &str = "#0090FF";
@@ -41,17 +40,21 @@ pub fn build_bg_tab(state: &UiState) -> ui::Element {
         .flex()
         .flex_direction(ui::FlexDirection::Column)
         .width_full()
-        .gap(10);
+        .gap(8);
 
     if state.bg_guide {
         return build_guide();
     }
 
     root.child(build_transfer_card())
-        .child(build_preset_card(state))
-        .child(build_section_title("图片处理"))
-        .child(build_edit_card(state))
-        .child(build_section_title("背景图"))
+        // 与设置页一样：小标题前面那张卡片多留 10，标题与上方卡片之间就是 8 + 10 = 18
+        .child(build_preset_card(state).margin_bottom(10))
+        .child(super::build::build_section_title("图片处理"))
+        .child(build_edit_card(state).margin_bottom(10))
+        .child(super::build::build_section_title(&format!(
+            "已配置 {}/12 张",
+            state.bg_codes.len()
+        )))
         .child(build_code_list_card(state))
 }
 
@@ -59,101 +62,68 @@ pub fn build_bg_tab(state: &UiState) -> ui::Element {
 ///
 /// 和顶部那张传输状态卡刻意区分：状态卡是纯信息底色的两行文字，这里是带图标的
 /// 可点条目，用淡蓝底 + 强调色图标，一眼能看出是操作而不是状态。
-/// 窄屏排成整行列表，宽屏才排成三列卡片。
+/// 排列方式和下面的背景图列表一致：同一套条目，列数随宽度自适应。
 fn build_preset_card(state: &UiState) -> ui::Element {
-    let compact = state.is_compact_layout();
     let has_images = !state.bg_codes.is_empty();
 
-    let guide = action_entry(
-        icons::info_svg(),
-        "说明",
-        BG_GUIDE_EVENT,
-        ACCENT,
-        compact,
-    );
+    let guide = action_entry(icons::info_svg(), "说明", BG_GUIDE_EVENT, ACCENT);
     let import = action_entry(
         icons::download_simple_svg(),
         "导入预设包",
         BG_IMPORT_EVENT,
         ACCENT,
-        compact,
     );
     let export = action_entry(
         icons::upload_simple_svg(),
         "导出预设包",
         BG_EXPORT_EVENT,
         if has_images { ACCENT } else { "#636366" },
-        compact,
     );
 
-    let card = build_card().padding(8).gap(6);
-    if compact {
-        return card.child(guide).child(import).child(export);
-    }
-
-    card.child(
+    build_card().padding(8).child(
         ui::Element::new(ui::ElementType::Grid, None)
             .width_full()
-            .prop("columns", "repeat(3, 1fr)")
-            .prop("gap", "8px")
+            .prop(
+                "columns",
+                // auto-fit：条目不足一整行时折叠空轨道，让现有条目平摊整宽
+                &format!("repeat(auto-fit, minmax({}px, 1fr))", ACTION_MIN_COLUMN),
+            )
+            .prop("gap", &format!("{}px", crate::ui::state::ROW_COLUMN_GAP))
             .child(guide)
             .child(import)
             .child(export),
     )
 }
 
-/// 窄屏是整行（图标在左、文字在右），宽屏是竖排小卡片
-fn action_entry(
-    icon_svg: String,
-    label: &str,
-    event_id: &str,
-    color: &str,
-    compact: bool,
-) -> ui::Element {
+/// 动作条目：图标在左、文字在右，占满一格
+fn action_entry(icon_svg: String, label: &str, event_id: &str, color: &str) -> ui::Element {
     let enabled = color == ACCENT;
 
     let icon = ui::Element::new(ui::ElementType::Svg, Some(&icon_svg))
-        .width(if compact { 18 } else { 20 })
-        .height(if compact { 18 } else { 20 })
+        .width(18)
+        .height(18)
         .text_color(color);
 
-    let text = ui::Element::new(ui::ElementType::Span, Some(label))
-        .size(if compact { 14 } else { 12 })
-        .text_color(color);
-
-    let button = ui::Element::new(ui::ElementType::Button, None)
+    ui::Element::new(ui::ElementType::Button, None)
         .without_default_styles()
         .on(ui::Event::Click, event_id)
         .radius(12)
-        .bg(if enabled { "#0090FF1F" } else { "#FFFFFF0A" });
-
-    if compact {
-        return button
-            .flex()
-            .flex_direction(ui::FlexDirection::Row)
-            .align_center()
-            .width_full()
-            .gap(10)
-            .padding_top(11)
-            .padding_bottom(11)
-            .padding_left(12)
-            .padding_right(12)
-            .child(icon)
-            .child(text);
-    }
-
-    button
+        .bg(if enabled { "#0090FF1F" } else { "#FFFFFF0A" })
         .flex()
-        .flex_direction(ui::FlexDirection::Column)
+        .flex_direction(ui::FlexDirection::Row)
         .align_center()
-        .justify_center()
-        .gap(6)
-        .padding_top(12)
-        .padding_bottom(12)
-        .padding_left(6)
-        .padding_right(6)
+        .width_full()
+        .gap(10)
+        .padding_top(11)
+        .padding_bottom(11)
+        .padding_left(12)
+        .padding_right(12)
         .child(icon)
-        .child(text)
+        .child(
+            ui::Element::new(ui::ElementType::Span, Some(label))
+                .size(14)
+                .text_color(color),
+        )
 }
 
 /// 使用说明。写的是插件端真实行为，不照搬安卓端那套（端上选图 + 与快应用两套独立存储）。
@@ -165,7 +135,7 @@ fn build_guide() -> ui::Element {
         ),
         (
             "已配置的样子",
-            "没有图的整块卡片/整行可点，点一下就是导入；已有图时右上角 ✕ 删除并恢复默认（二次确认），删完这一格回到未配置，再点一次导入新的。桌面端排成多列卡片，移动端排成单列列表，行为完全一致。",
+            "每条只有右侧按钮可点：没图时是 ＋，点它挑一张导入；已有图时是 ✕，删除并恢复默认（二次确认），删完这一条回到未配置，再点 ＋ 导入新的。条目样式两端一致，窄屏排一列、宽屏排多列。",
         ),
         (
             "删除即恢复默认",
@@ -330,7 +300,7 @@ fn build_transfer_card() -> ui::Element {
     row
 }
 
-/// 图片处理：压暗 + 模糊，滑块上方左侧标签、右侧数值
+/// 图片处理：压暗 + 模糊，两项各自一张卡片，列数随宽度自适应
 fn build_edit_card(state: &UiState) -> ui::Element {
     let darken = build_slider_row(
         icons::darken_svg(),
@@ -345,42 +315,51 @@ fn build_edit_card(state: &UiState) -> ui::Element {
         BG_BLUR_SLIDER_EVENT,
     );
 
-    let card = build_card();
-    if state.is_compact_layout() {
-        return card.child(darken).child(blur);
-    }
-
-    // 桌面：两条滑块并排
-    card.flex_direction(ui::FlexDirection::Row)
-        .align_center()
-        .gap(24)
-        .child(darken.flex_grow(1.0))
-        .child(blur.flex_grow(1.0))
+    ui::Element::new(ui::ElementType::Grid, None)
+        .width_full()
+        .prop(
+            "columns",
+            &format!(
+                "repeat(auto-fit, minmax({}px, 1fr))",
+                EDIT_CARD_MIN_COLUMN
+            ),
+        )
+        .prop("gap", &format!("{}px", crate::ui::state::ROW_COLUMN_GAP))
+        .child(darken)
+        .child(blur)
 }
 
+/// 单项设置卡片：图标在左，右侧上下排布「名称 + 数值」和滑块。
+/// 图标尺寸、文字样式与内边距都对齐设置列表的卡片。
 fn build_slider_row(icon_svg: String, label: &str, value: u32, event_id: &str) -> ui::Element {
     let value_text = value.to_string();
     let max_prop = SLIDER_MAX.to_string();
     let value_prop = value.to_string();
 
-    let header = ui::Element::new(ui::ElementType::Div, None)
+    let icon = ui::Element::new(ui::ElementType::Svg, Some(&icon_svg))
+        .width(22)
+        .height(22)
+        .text_color("#FFFFFF");
+
+    let icon_wrap = ui::Element::new(ui::ElementType::Div, None)
+        .width(22)
+        .height(22)
+        .flex()
+        .align_center()
+        .justify_center()
+        .child(icon);
+
+    let title_row = ui::Element::new(ui::ElementType::Div, None)
         .flex()
         .flex_direction(ui::FlexDirection::Row)
         .align_center()
         .width_full()
-        .gap(8)
-        .child(
-            ui::Element::new(ui::ElementType::Svg, Some(&icon_svg))
-                .width(18)
-                .height(18)
-                .text_color(MUTED),
-        )
-        .child(ui::Element::new(ui::ElementType::P, Some(label)).size(14))
+        .child(ui::Element::new(ui::ElementType::P, Some(label)).size(15))
         .child(build_spacer())
         .child(
             ui::Element::new(ui::ElementType::P, Some(&value_text))
-                .size(14)
-                .text_color(ACCENT),
+                .size(13)
+                .text_color("#BBBBBB"),
         );
 
     let slider = ui::Element::new(ui::ElementType::Slider, None)
@@ -395,153 +374,55 @@ fn build_slider_row(icon_svg: String, label: &str, value: u32, event_id: &str) -
         .prop("size", "2")
         .on(ui::Event::Change, event_id);
 
-    ui::Element::new(ui::ElementType::Div, None)
+    let text_col = ui::Element::new(ui::ElementType::Div, None)
         .flex()
         .flex_direction(ui::FlexDirection::Column)
-        .width_full()
-        .gap(6)
-        .child(header)
-        .child(slider)
-}
+        .flex_grow(1.0)
+        .gap(10)
+        .child(title_row)
+        .child(slider);
 
-/// 已配置 N/12 与删除按钮，下方按版式排列表或卡片
-fn build_code_list_card(state: &UiState) -> ui::Element {
-    let mut header = ui::Element::new(ui::ElementType::Div, None)
+    ui::Element::new(ui::ElementType::Div, None)
         .flex()
         .flex_direction(ui::FlexDirection::Row)
         .align_center()
         .width_full()
-        .child(
-            ui::Element::new(ui::ElementType::P, Some(&format!(
-                "已配置 {}/12 张",
-                state.bg_codes.len()
-            )))
-            .size(14),
-        )
-        .child(build_spacer());
+        .bg(CARD_BG)
+        .radius(18)
+        .padding_left(12)
+        .padding_right(12)
+        .padding_top(10)
+        .padding_bottom(10)
+        .gap(10)
+        .child(icon_wrap)
+        .child(text_col)
+}
 
-    if !state.bg_codes.is_empty() {
-        header = header.child(build_small_button(
-            "删除全部",
-            BG_CLEAR_ALL_EVENT,
-            "#FF453A1F",
-            DANGER,
-        ));
-    }
-
-    if state.is_compact_layout() {
-        let mut card = build_card().padding_top(4).padding_bottom(4).child(header);
-        for (code, label) in crate::bg::protocol::WEATHER_BG_CODES.iter() {
-            card = card.child(build_code_row(code, label, state));
-        }
-        return card;
-    }
-
-    // 桌面：滚动区 + 自适应列网格
+/// 12 个天气编号的列表：每项自成一张卡片，按宽度自适应列数
+fn build_code_list_card(state: &UiState) -> ui::Element {
+    // 两种宽度共用同一套卡片条目，只有列数不同：窄屏一列、宽屏多列
     let mut grid = ui::Element::new(ui::ElementType::Grid, None)
         .width_full()
         .prop(
             "columns",
-            &format!("repeat(auto-fill, minmax({}px, 1fr))", crate::ui::state::CARD_MIN_COLUMN),
-        )
-        .prop("gap", &format!("{}px", crate::ui::state::CARD_COLUMN_GAP));
-    for (code, label) in crate::bg::protocol::WEATHER_BG_CODES.iter() {
-        grid = grid.child(build_code_card(code, label, state));
-    }
-
-    build_card().child(header).child(grid)
-}
-
-/// 桌面卡片：方形预览图在上、天气文字在下，右上角是删除/导入按钮。
-/// 没有图时整张卡片可点，点了就是导入；已有图只能先点 ✕ 删除。
-fn build_code_card(code: &str, label: &str, state: &UiState) -> ui::Element {
-    let has_custom = state.bg_codes.iter().any(|saved| saved == code);
-
-    let preview = match state.bg_thumbs.get(code).map(String::as_str) {
-        Some(uri) => {
-            ui::Element::new(ui::ElementType::Image, Some(uri))
-                .width(CARD_THUMB_SIZE)
-                .height(CARD_THUMB_SIZE)
-                .radius(10)
-        }
-        None => ui::Element::new(ui::ElementType::Div, None)
-            .width(CARD_THUMB_SIZE)
-            .height(CARD_THUMB_SIZE)
-            .radius(10)
-            .bg(CARD_INNER_BG)
-            .flex()
-            .align_center()
-            .justify_center()
-            .child(
-                ui::Element::new(ui::ElementType::Svg, Some(&icons::image_svg()))
-                    .width(28)
-                    .height(28)
-                    .text_color(FAINT),
+            &format!(
+                "repeat(auto-fit, minmax({}px, 1fr))",
+                crate::ui::state::ROW_MIN_COLUMN
             ),
-    };
-
-    // 右上角动作按钮：没图是加号，有图是叉号
-    let thumb = ui::Element::new(ui::ElementType::Div, None)
-        .relative()
-        .width(CARD_THUMB_SIZE)
-        .height(CARD_THUMB_SIZE)
-        .child(preview)
-        .child(
-            ui::Element::new(ui::ElementType::Div, None)
-                .absolute()
-                .top(6)
-                .right(6)
-                .child(if has_custom {
-                    build_icon_button(
-                        icons::x_svg(),
-                        &format!("{}{}", BG_DELETE_PREFIX, code),
-                        "#1C1C1EBF",
-                        DANGER,
-                    )
-                } else {
-                    build_icon_button(
-                        icons::plus_svg(),
-                        &format!("{}{}", BG_PICK_PREFIX, code),
-                        "#1C1C1EBF",
-                        ACCENT,
-                    )
-                }),
-        );
-
-    let mut card = ui::Element::new(ui::ElementType::Div, None)
-        .flex()
-        .flex_direction(ui::FlexDirection::Column)
-        .align_center()
-        .width_full()
-        .bg(CARD_ITEM_BG)
-        .radius(14)
-        .padding(10)
-        .gap(10)
-        .child(thumb)
-        .child(ui::Element::new(ui::ElementType::P, Some(label)).size(15));
-
-    if has_custom {
-        let file_name = crate::bg::store::label_of(code);
-        if !file_name.trim().is_empty() {
-            card = card.child(
-                ui::Element::new(ui::ElementType::P, Some(&file_name))
-                    .size(12)
-                    .padding_top(4)
-                    .padding_bottom(4)
-                    .text_color(MUTED),
-            );
-        }
-        // 已有图：整张卡片不可点，换图要先走 ✕ 删除
-        card
-    } else {
-        // 没有图：整张卡片就是导入入口
-        card.on(ui::Event::Click, &format!("{}{}", BG_PICK_PREFIX, code))
+        )
+        .prop("gap", &format!("{}px", crate::ui::state::ROW_COLUMN_GAP));
+    for (code, label) in crate::bg::protocol::WEATHER_BG_CODES.iter() {
+        grid = grid.child(build_code_row(code, label, state));
     }
+
+    grid
 }
 
-/// 列表行：对齐安卓 `BackgroundImageItem`——缩略图 + 两行文字 + 右侧一颗图标
+/// 列表项卡片：对齐安卓 `BackgroundImageItem`——缩略图 + 两行文字 + 右侧一颗图标，
+/// 每项一张卡，尺寸与设置列表的卡片一致
 ///
-/// 没有图时整行可点，点了就是导入；已有图只能先点 ✕ 删除。
+/// 只有右侧按钮可点：没图是 ＋ 选图，有图是 ✕ 删除。整行不绑事件，
+/// 否则按钮的点击会冒泡到行上，同一个选图事件被派发两次。
 fn build_code_row(code: &str, label: &str, state: &UiState) -> ui::Element {
     let has_custom = state.bg_codes.iter().any(|saved| saved == code);
 
@@ -568,37 +449,43 @@ fn build_code_row(code: &str, label: &str, state: &UiState) -> ui::Element {
             ),
     };
 
-    // 两行文字：天气名 + 文件名（没图时不显示第二行）
+    // 两行文字：天气名 + 副标题（有图是文件名，没图提示走默认背景）
     let mut text_col = ui::Element::new(ui::ElementType::Div, None)
         .flex()
         .flex_direction(ui::FlexDirection::Column)
         .flex_grow(1.0)
         .gap(2)
         .child(ui::Element::new(ui::ElementType::P, Some(label)).size(15));
-    if has_custom {
-        let file_name = crate::bg::store::label_of(code);
-        if !file_name.trim().is_empty() {
-            text_col = text_col.child(
-                ui::Element::new(ui::ElementType::P, Some(&file_name))
-                    .size(12)
-                    .text_color(MUTED),
-            );
-        }
+    let subtitle = if has_custom {
+        crate::bg::store::label_of(code)
+    } else {
+        "使用默认背景".to_string()
+    };
+    if !subtitle.trim().is_empty() {
+        text_col = text_col.child(
+            ui::Element::new(ui::ElementType::P, Some(&subtitle))
+                .size(12)
+                .text_color(MUTED),
+        );
     }
 
-    let mut row = ui::Element::new(ui::ElementType::Div, None)
+    let row = ui::Element::new(ui::ElementType::Div, None)
         .flex()
         .flex_direction(ui::FlexDirection::Row)
         .align_center()
         .width_full()
-        .padding_top(8)
-        .padding_bottom(8)
-        .gap(12)
+        .bg(CARD_BG)
+        .radius(18)
+        .padding_left(12)
+        .padding_right(12)
+        .padding_top(10)
+        .padding_bottom(10)
+        .gap(10)
         .child(thumb)
         .child(text_col);
 
-    // 右侧动作按钮：没图是加号，有图是叉号，与安卓一致
-    row = row.child(if has_custom {
+    // 右侧动作按钮：没图是加号（点它选图），有图是叉号（点它删除），与安卓一致
+    row.child(if has_custom {
         build_icon_button(
             icons::x_svg(),
             &format!("{}{}", BG_DELETE_PREFIX, code),
@@ -612,13 +499,7 @@ fn build_code_row(code: &str, label: &str, state: &UiState) -> ui::Element {
             CARD_INNER_BG,
             ACCENT,
         )
-    });
-
-    if !has_custom {
-        row = row.on(ui::Event::Click, &format!("{}{}", BG_PICK_PREFIX, code));
-    }
-
-    row
+    })
 }
 
 fn build_card() -> ui::Element {
@@ -630,14 +511,6 @@ fn build_card() -> ui::Element {
         .radius(18)
         .padding(14)
         .gap(10)
-}
-
-fn build_section_title(text: &str) -> ui::Element {
-    ui::Element::new(ui::ElementType::P, Some(text))
-        .size(13)
-        .text_color(MUTED)
-        .margin_left(4)
-        .margin_top(6)
 }
 
 fn build_spacer() -> ui::Element {
@@ -663,7 +536,8 @@ fn build_small_button(label: &str, event_id: &str, bg: &str, text_color: &str) -
         .child(ui::Element::new(ui::ElementType::Span, Some(label)).size(13))
 }
 
-fn build_icon_button(icon_svg: String, event_id: &str, bg: &str, color: &str) -> ui::Element {
+/// 圆形图标按钮的外观，不绑事件，作为可点区域里的视觉提示
+fn build_icon_badge(icon_svg: String, bg: &str, color: &str) -> ui::Element {
     let icon = ui::Element::new(ui::ElementType::Svg, Some(&icon_svg))
         .width(18)
         .height(18)
@@ -671,7 +545,6 @@ fn build_icon_button(icon_svg: String, event_id: &str, bg: &str, color: &str) ->
 
     ui::Element::new(ui::ElementType::Button, None)
         .without_default_styles()
-        .on(ui::Event::Click, event_id)
         .radius(999)
         .width(32)
         .height(32)
@@ -680,4 +553,8 @@ fn build_icon_button(icon_svg: String, event_id: &str, bg: &str, color: &str) ->
         .align_center()
         .justify_center()
         .child(icon)
+}
+
+fn build_icon_button(icon_svg: String, event_id: &str, bg: &str, color: &str) -> ui::Element {
+    build_icon_badge(icon_svg, bg, color).on(ui::Event::Click, event_id)
 }
