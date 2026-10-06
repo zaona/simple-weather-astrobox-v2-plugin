@@ -144,6 +144,8 @@ pub fn commit(
     }
 
     let target = source_path(code, "png");
+    // 手机推来的永远是 PNG，先清掉这个编号可能残留的其它格式原件
+    remove_sources(code);
     fs::rename(&part, &target).map_err(|e| format!("保存 {} 失败: {}", target.display(), e))?;
     save_meta(&ImageMeta {
         code: code.to_string(),
@@ -165,19 +167,55 @@ pub fn discard(code: &str) {
 /// 保存端上选择的原件
 pub fn save_source(code: &str, ext: &str, bytes: &[u8]) -> std::io::Result<()> {
     ensure_dir()?;
+    // 一个编号只留一份原件：换格式重新选图时先把旧的清掉
+    remove_sources(code);
     fs::write(source_path(code, ext), bytes)
 }
 
-/// 读取原件。早期版本只存了成品图，这里回退读成品图，保证升级后滑块依然可用。
+/// 清掉某个编号已有的原件（含别的扩展名），避免同时留两份
+fn remove_sources(code: &str) {
+    let prefix = format!("{SOURCE_PREFIX}{code}.");
+    let Ok(entries) = fs::read_dir(bg_dir()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(&prefix) && !name.ends_with(PART_SUFFIX) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// 原件在磁盘上的实际扩展名（`source-{code}.{ext}`），没有则返回 `None`
+fn source_ext_on_disk(code: &str) -> Option<String> {
+    let prefix = format!("{SOURCE_PREFIX}{code}.");
+    let entries = fs::read_dir(bg_dir()).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if let Some(ext) = name.strip_prefix(&prefix) {
+            if !ext.is_empty() && !ext.ends_with(PART_SUFFIX) {
+                return Some(ext.to_ascii_lowercase());
+            }
+        }
+    }
+    None
+}
+
+/// 读取原件。早期版本只存了成品图，那种情况才回退读成品图（这类图无法再无损还原）。
 pub fn load_source(code: &str) -> Option<Vec<u8>> {
-    let ext = metas()
-        .into_iter()
-        .find(|meta| meta.code == code)
-        .map(|meta| meta.ext)
-        .unwrap_or_else(|| "png".to_string());
-    fs::read(source_path(code, &ext))
-        .ok()
-        .or_else(|| fs::read(processed_path(code)).ok())
+    // 以磁盘上的实际文件名为准，元信息里的 ext 只作为兜底
+    let ext = source_ext_on_disk(code).or_else(|| {
+        metas()
+            .into_iter()
+            .find(|meta| meta.code == code)
+            .map(|meta| meta.ext)
+    });
+    if let Some(bytes) = ext.and_then(|ext| fs::read(source_path(code, &ext)).ok()) {
+        return Some(bytes);
+    }
+    fs::read(processed_path(code)).ok()
 }
 
 /// 写入按当前滑块处理好的成品图
@@ -190,10 +228,14 @@ pub fn save_processed(
 ) -> std::io::Result<()> {
     ensure_dir()?;
     fs::write(processed_path(code), bytes)?;
-    let ext = metas()
-        .into_iter()
-        .find(|meta| meta.code == code)
-        .map(|meta| meta.ext)
+    // 记原件在磁盘上的真实扩展名，端上选 JPG/WebP 时不能记成 png
+    let ext = source_ext_on_disk(code)
+        .or_else(|| {
+            metas()
+                .into_iter()
+                .find(|meta| meta.code == code)
+                .map(|meta| meta.ext)
+        })
         .unwrap_or_else(|| "png".to_string());
     save_meta(&ImageMeta {
         code: code.to_string(),
@@ -320,4 +362,51 @@ fn now_ms() -> u64 {
 /// 供 UI 判断某张图是否已存在的轻量集合
 pub fn custom_code_set() -> HashSet<String> {
     custom_codes().into_iter().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 端上选 JPG/WebP 时元信息不能记成 png，否则读原件会落到成品图上，
+    /// 滑块就变成在成品图上叠加、再也调不回去
+    #[test]
+    fn source_ext_follows_disk_file() {
+        let original_dir = std::env::current_dir().unwrap();
+        let dir = std::env::temp_dir().join(format!("swbg-store-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+
+        // 端上选 JPG：元信息要记 jpg，读取要拿到原件
+        save_source("21", "jpg", b"JPEG").unwrap();
+        save_processed("21", "photo.jpg", 10, 10, b"PROCESSED").unwrap();
+        assert_eq!(metas()[0].ext, "jpg");
+        assert_eq!(load_source("21").unwrap(), b"JPEG");
+
+        // 换成 png 重新选图：旧原件清掉，读回新的
+        save_source("21", "png", b"PNG2").unwrap();
+        assert_eq!(source_ext_on_disk("21").as_deref(), Some("png"));
+        assert_eq!(load_source("21").unwrap(), b"PNG2");
+
+        // 老状态：磁盘上是 jpg、元信息写成 png，也要能读回原件
+        std::fs::write("bg/source-31.jpg", b"OLDJPG").unwrap();
+        save_meta(&ImageMeta {
+            code: "31".into(),
+            label: "x".into(),
+            width: 1,
+            height: 1,
+            bytes: 6,
+            updated_ms: 1,
+            ext: "png".into(),
+        });
+        assert_eq!(load_source("31").unwrap(), b"OLDJPG");
+
+        // 完全没有原件（早期版本）才回退成品图
+        std::fs::write("bg/custom-bg-41.png", b"ONLYPROCESSED").unwrap();
+        assert_eq!(load_source("41").unwrap(), b"ONLYPROCESSED");
+
+        std::env::set_current_dir(&original_dir).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
