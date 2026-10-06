@@ -1,17 +1,19 @@
-//! 自定义背景图接收能力，协议与安卓端 `ImageSyncManager` 完全一致。
+//! 自定义背景图能力，协议与安卓端 `ImageSyncManager` 完全一致。
 //!
-//! 手机端把处理好的 PNG 按 base64 分片发过来，插件落盘到 `bg/custom-bg-{code}.png`，
-//! 再按同一套协议回执。宿主（AstroBox）承担底层传输，插件与安卓端是同等的对端，
-//! 谁先发起都一样。
+//! 插件是安卓端同等的发送端：端上选好图（或导入 `.swbg`）后，[`sync`] 把成品 PNG 按
+//! base64 分片推给手环快应用，手环回 `image_saved` / `clear_done` / `cancel`。
+//! 另一个方向（手环推图过来）由 [`session`] 的接收状态机处理，两个方向共用同一套
+//! 分片协议与同一份落盘布局，谁先发起都一样。
 //!
-//! 入口：[`handle_message`] 解析消息并驱动 [`session`] 状态机，返回需要回传给手机端的
-//! [`session::Reply`]；[`send_reply`] 负责经 interconnect 发出去。
+//! 入口：[`handle_message`] 先把快应用消息按回执喂给发送流程，再按接收协议驱动
+//! [`session`]；[`send_reply`] 负责把接收协议的回执经 interconnect 发出去。
 
 pub mod edit;
 pub mod preset;
 pub mod protocol;
 pub mod session;
 pub mod store;
+pub mod sync;
 
 use std::sync::Mutex;
 
@@ -22,13 +24,26 @@ use protocol::Incoming;
 /// 安卓快应用包名，图片来源与天气数据同属一个快应用
 pub const QUICK_APP_PKG: &str = "com.application.zaona.weather";
 
+/// 拉起快应用时用的入口页，与天气同步保持一致
+pub const QUICK_APP_PAGE: &str = "/index";
+
 const REGISTER_TIMER_PAYLOAD: &str = "bg_register";
 
 /// 滑块改动后逐张重算的定时器 payload
 const APPLY_TIMER_PAYLOAD: &str = "bg_apply";
 
+/// 安排一次「把手环要的背景图推过去」的定时器 payload
+const PUSH_TIMER_PAYLOAD: &str = "bg_push";
+
+/// 推送放到定时器里发起：UI 事件立即返回，宿主随后单独调度这轮传输
+const PUSH_START_DELAY_MS: u64 = 1;
+
 /// 一次只重算一张，避免十二张一起跑把界面卡住
 const APPLY_INTERVAL_MS: u64 = 60;
+
+/// 已经安排过一次推送，重复请求不再叠加定时器
+static PUSH_SCHEDULED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// 分帧重算队列
 #[derive(Default)]
@@ -56,6 +71,45 @@ static APPLY_QUEUE: Mutex<ApplyQueue> = Mutex::new(ApplyQueue {
 
 pub fn is_apply_timer_payload(payload: &str) -> bool {
     payload == APPLY_TIMER_PAYLOAD
+}
+
+pub fn is_push_timer_payload(payload: &str) -> bool {
+    payload == PUSH_TIMER_PAYLOAD
+}
+
+/// 安排一次「把已配置的背景图覆盖式推给手环」，对应背景图页那颗「发送到手表」。
+///
+/// 语义与安卓 `syncAllImages` 的覆盖传输模式一致：每次发送都把当前全部已配置图
+/// 重新发一遍。传输中来的请求（说明页/连点等）不打断当前这轮，只记一笔，
+/// 当前这轮结束后补一轮。
+pub fn schedule_push() {
+    if sync::is_active() {
+        sync::request_restart();
+        return;
+    }
+    if PUSH_SCHEDULED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    timer::set_timeout(PUSH_START_DELAY_MS, PUSH_TIMER_PAYLOAD);
+}
+
+/// 定时器回调：跑一轮推送
+pub async fn run_scheduled_push() {
+    PUSH_SCHEDULED.store(false, std::sync::atomic::Ordering::SeqCst);
+    match sync::sync_all().await {
+        Ok(_) => {}
+        // 已经有一轮在跑：请求已经记在 sync 里，等它结束后补一轮，不必打扰用户
+        Err(reason) if reason == "已有背景图传输在进行" => {}
+        // 没有已配置的图是正常状态（安卓端这时弹的是「确认清除」），不写进状态卡
+        Err(reason) if reason == "没有已配置的背景图" => {
+            tracing::info!("没有已配置的背景图，跳过推送");
+        }
+        Err(reason) => {
+            tracing::warn!("背景图推送未完成: {}", reason);
+            sync::report_failure(&reason);
+        }
+    }
+    crate::ui::build::rerender_main_ui();
 }
 
 /// 安排一次全量重算。已经在跑就并入当前这批参数。
@@ -156,20 +210,38 @@ pub async fn register_recv() {
     }
 }
 
-/// 处理一条手机端消息。返回需要回执的内容，非背景图协议的消息返回 `None`。
-pub fn handle_message(payload: &str) -> Option<session::Reply> {
+/// 一条快应用消息的处理结果
+pub enum Handled {
+    /// 接收协议产生的回执，需要发回快应用
+    Reply(session::Reply),
+    /// 手环回执（image_saved / clear_done / cancel / ready），已经交给发送流程
+    Ack,
+    /// 不是背景图协议的消息，交给原来的日志处理
+    Ignored,
+}
+
+/// 处理一条快应用消息。
+///
+/// 手环回执先交给发送流程（插件是安卓 `ImageSyncManager` 的对端，回执就是它要等的
+/// `image_saved` / `clear_done` / `cancel`）；剩下的再按接收协议走，保证两个方向
+/// 共用一套消息通道时互不干扰。
+pub fn handle_message(payload: &str) -> Handled {
+    if sync::deliver_ack(payload) {
+        return Handled::Ack;
+    }
+
     match protocol::parse(payload) {
         Incoming::Header(header) => {
             if let Err(reason) = session::on_header(header) {
                 tracing::warn!("header 处理失败: {}", reason);
             }
-            None
+            Handled::Ignored
         }
         Incoming::Data { index, chunk } => {
             if let Err(reason) = session::on_chunk(index, &chunk) {
                 tracing::warn!("分片处理失败 index={}: {}", index, reason);
             }
-            None
+            Handled::Ignored
         }
         Incoming::End => match session::on_end() {
             Ok(reply) => {
@@ -180,25 +252,34 @@ pub fn handle_message(payload: &str) -> Option<session::Reply> {
                         tracing::warn!("{} 收到后出图失败: {}", weather_code, e);
                     }
                 }
-                reply
+                match reply {
+                    Some(reply) => Handled::Reply(reply),
+                    None => Handled::Ignored,
+                }
             }
             Err(reason) => {
                 tracing::warn!("结束处理失败: {}", reason);
-                None
+                Handled::Ignored
             }
         },
-        Incoming::ClearAll => Some(session::on_clear_all()),
-        Incoming::Cancel => Some(session::on_cancel("手机端已取消传输")),
-        Incoming::Foreign => None,
+        Incoming::ClearAll => Handled::Reply(session::on_clear_all()),
+        Incoming::Cancel => Handled::Ignored,
+        Incoming::Foreign => Handled::Ignored,
     }
 }
 
-/// 用户在插件里主动取消：与手机端取消走同一条路径。
-pub fn cancel_active() -> Option<session::Reply> {
+/// 用户在插件里主动取消「取消传输」按钮。
+///
+/// 正在推图时通知手环并中止本地这轮（对齐安卓 `cancelTransfer`）；正在收图时
+/// 丢弃半成品并回执 `cancel`。
+pub async fn cancel_active() {
+    if sync::is_active() {
+        sync::cancel().await;
+        return;
+    }
     if session::is_receiving() {
-        Some(session::on_cancel("已手动取消"))
-    } else {
-        None
+        let reply = session::on_cancel("已手动取消");
+        send_reply(reply).await;
     }
 }
 
@@ -244,6 +325,14 @@ pub fn current_edit_settings() -> (u32, u32) {
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     (state.bg_darken, state.bg_blur)
+}
+
+/// 对齐安卓 `advanced_sync_mode`：开启时推送前先拉起快应用并握手
+pub fn advanced_sync_mode() -> bool {
+    let state = crate::ui::state::ui_state()
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    state.bg_advanced_sync_mode
 }
 
 /// 拉起系统图片选择器，把选中的图作为该天气编号的原件并立即按当前滑块出图。

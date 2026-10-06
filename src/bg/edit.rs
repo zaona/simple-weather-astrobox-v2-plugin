@@ -1,13 +1,16 @@
 //! 背景图编辑，算法逐行对齐安卓端 `ImageProcessingUtil` 与 `ImageSyncManager`：
 //!
-//! 1. 缩放到 ≤432×514（`calculateInSampleSize` + `scaleBitmapIfNeeded`）
+//! 1. 缩放：先按 `calculateInSampleSize` 采样，再等比缩放到 ≤432×514
+//!    （对应 `decodeAndScale` 里的 `scaleBitmapIfNeeded`）
 //! 2. 模糊：`boxBlur` 3 次迭代，可分离滑动窗口，边界 `coerceIn` 夹取
 //! 3. 压暗：alpha = `strength * 255 / 100` 的黑色覆盖
-//! 4. 量化：RGB565 位截断（对齐安卓 `Bitmap.Config.RGB_565` 的 Canvas 转换）
-//! 5. PNG 编码：`Compression::Best`，对齐安卓 `compress(quality = 100)`
+//! 4. 量化：RGB565 位截断，半透明像素按 `SRC_OVER` 合成到黑底
+//!    （对齐安卓把图画进 `Bitmap.Config.RGB_565`）
+//! 5. PNG 编码：不带 alpha 通道，`Compression::Best`
 //!
-//! 与安卓端的差别只有一处：安卓在手机上处理完再发送，插件收到的是成品图，因此
-//! 插件把收到的字节当作原件保存，编辑结果另存为渲染副本，滑块可反复调整而不破坏原件。
+//! 与安卓端的差别只有落盘方式：安卓手机只存原件 + 参数，每次同步现算现发；插件把
+//! 原件（`bg/source-*`）和处理好的成品（`bg/custom-bg-*.png`）各存一份，滑块改动时
+//! 从原件重算，发送时同样从原件重走一遍流水线，所以往回调不会把图越调越糊。
 
 use std::io::Cursor;
 
@@ -198,21 +201,112 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<Rgba, String> {
 
 /// 编码为 PNG，对齐安卓 `compress(PNG, 100)`
 pub fn encode_png(image: &Rgba) -> Vec<u8> {
+    encode_png_with(image, png::ColorType::Rgba)
+}
+
+/// 不带 alpha 通道的 PNG。成品图在 `quantize_rgb565` 之后 alpha 恒为 255，
+/// 丢掉 alpha 通道画质不变、体积更小，也更接近安卓那张 RGB_565 位图压出来的 PNG。
+pub fn encode_png_rgb(image: &Rgba) -> Vec<u8> {
+    encode_png_with(image, png::ColorType::Rgb)
+}
+
+fn encode_png_with(image: &Rgba, color: png::ColorType) -> Vec<u8> {
+    let pixels = match color {
+        png::ColorType::Rgb => {
+            let mut rgb = Vec::with_capacity(image.pixels.len() / 4 * 3);
+            for px in image.pixels.chunks_exact(4) {
+                rgb.extend_from_slice(&px[..3]);
+            }
+            rgb
+        }
+        _ => image.pixels.clone(),
+    };
     let mut buf = Vec::new();
     {
         let mut encoder = Encoder::new(&mut buf, image.width, image.height);
-        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_color(color);
         encoder.set_depth(png::BitDepth::Eight);
         encoder.set_compression(Compression::Best);
         let mut writer = encoder.write_header().expect("PNG 头写入失败");
         writer
-            .write_image_data(&image.pixels)
+            .write_image_data(&pixels)
             .expect("PNG 数据写入失败");
     }
     buf
 }
 
-/// 缩放到指定上限内，比例与安卓一致：先按 2 的幂采样，再等比缩放
+/// 对齐安卓 `ImageSyncManager.calculateInSampleSize`：按 2 的幂找采样比，
+/// 条件是「再降一档就有一边小于目标」。
+pub fn calculate_in_sample_size(
+    raw_width: u32,
+    raw_height: u32,
+    req_width: u32,
+    req_height: u32,
+) -> u32 {
+    let mut in_sample_size = 1u32;
+    if raw_height > req_height || raw_width > req_width {
+        let half_height = raw_height / 2;
+        let half_width = raw_width / 2;
+        while half_height / in_sample_size >= req_height
+            && half_width / in_sample_size >= req_width
+        {
+            in_sample_size *= 2;
+        }
+    }
+    in_sample_size
+}
+
+/// 按整数倍做盒式平均采样，对应安卓 `BitmapFactory` 用 `inSampleSize` 解码时
+/// 把 factor×factor 邻域平均掉的效果（边缘不足一整块时按实际像素数平均）。
+fn box_subsample(image: &Rgba, factor: u32) -> Rgba {
+    if factor <= 1 {
+        return Rgba {
+            width: image.width,
+            height: image.height,
+            pixels: image.pixels.clone(),
+        };
+    }
+    let out_width = (image.width.div_ceil(factor)).max(1);
+    let out_height = (image.height.div_ceil(factor)).max(1);
+    let mut out = Rgba::new(out_width, out_height);
+
+    for y in 0..out_height {
+        let y0 = y * factor;
+        let y1 = (y0 + factor).min(image.height);
+        for x in 0..out_width {
+            let x0 = x * factor;
+            let x1 = (x0 + factor).min(image.width);
+            let mut sum = [0u32; 4];
+            let mut count = 0u32;
+            for sy in y0..y1 {
+                for sx in x0..x1 {
+                    let px = image.get(sx, sy);
+                    for c in 0..4 {
+                        sum[c] += px[c] as u32;
+                    }
+                    count += 1;
+                }
+            }
+            let count = count.max(1);
+            let mut rgba = [0u8; 4];
+            for c in 0..4 {
+                rgba[c] = (sum[c] / count) as u8;
+            }
+            out.set(x, y, rgba);
+        }
+    }
+    out
+}
+
+/// 对齐安卓 `decodeAndScale`：先按 `calculateInSampleSize` 采样，再等比缩放到上限内。
+/// 大图先降一档，后续模糊 / 压暗和画质都贴近安卓那条流水线。
+pub fn decode_and_scale(image: &Rgba, max_width: u32, max_height: u32) -> Rgba {
+    let factor = calculate_in_sample_size(image.width, image.height, max_width, max_height);
+    let sampled = box_subsample(image, factor);
+    fit(&sampled, max_width, max_height)
+}
+
+/// 缩放到指定上限内，比例与安卓一致：等比缩放，长边贴上限
 pub fn fit(image: &Rgba, max_width: u32, max_height: u32) -> Rgba {
     if image.width <= max_width && image.height <= max_height {
         return Rgba {
@@ -388,9 +482,19 @@ fn box_blur(image: &mut Rgba, radius: i64) {
     }
 }
 
-/// RGB565 位截断量化，对齐安卓把图画进 `Bitmap.Config.RGB_565`
+/// RGB565 位截断量化，对齐安卓把图画进 `Bitmap.Config.RGB_565`。
+///
+/// 目标是 16 位、没有 alpha 通道的位图，所以半透明像素先按 `SRC_OVER` 合成到
+/// 黑色不透明底（`dst = src × a`），再逐通道截断；不透明像素只做截断。
 pub fn quantize_rgb565(image: &mut Rgba) {
     for px in image.pixels.chunks_exact_mut(4) {
+        let alpha = px[3] as u32;
+        if alpha < 255 {
+            for c in 0..3 {
+                px[c] = ((px[c] as u32 * alpha + 127) / 255).min(255) as u8;
+            }
+        }
+        px[3] = 255;
         px[0] &= 0xF8;
         px[1] &= 0xFC;
         px[2] &= 0xF8;
@@ -400,11 +504,12 @@ pub fn quantize_rgb565(image: &mut Rgba) {
 /// 完整编辑流程：缩放 → 模糊 → 压暗 → RGB565 → PNG
 pub fn process(bytes: &[u8], darken: u32, blur: u32) -> Result<Vec<u8>, String> {
     let mut image = decode(bytes)?;
-    image = fit(&image, MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT);
+    // 对齐安卓 `decodeAndScale`：按 inSampleSize 采样后再等比缩放
+    image = decode_and_scale(&image, MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT);
     apply_blur(&mut image, blur);
     apply_darken(&mut image, darken);
     quantize_rgb565(&mut image);
-    Ok(encode_png(&image))
+    Ok(encode_png_rgb(&image))
 }
 
 /// 解码后按「填满」裁成边长 `size` 的正方形，再编码 PNG
@@ -476,6 +581,71 @@ mod tests {
         assert_eq!(image.get(0, 0), [0xF8, 0xFC, 0xF8, 0xFF]);
     }
 
+    /// RGB_565 没有 alpha 通道：半透明像素在安卓那边会被合成到黑底
+    #[test]
+    fn rgb565_composites_transparency_onto_black() {
+        let mut image = Rgba::new(1, 1);
+        image.set(0, 0, [255, 255, 255, 128]);
+        quantize_rgb565(&mut image);
+        // 255 * 128 / 255 = 128 -> 截断到 5/6/5 位
+        let px = image.get(0, 0);
+        assert_eq!(px[3], 255);
+        assert_eq!(px[0], 128 & 0xF8);
+        assert_eq!(px[1], 128 & 0xFC);
+        assert_eq!(px[2], 128 & 0xF8);
+    }
+
+    /// 成品图不带 alpha：体积更小，解码回来像素仍是量化后的值
+    #[test]
+    fn processed_png_has_no_alpha_channel() {
+        let image = gradient(16, 16);
+        let encoded = encode_png(&image);
+        let encoded_rgb = encode_png_rgb(&image);
+        assert!(encoded_rgb.len() < encoded.len(), "丢掉 alpha 通道后应更小");
+
+        let decoded = decode(&encoded_rgb).unwrap();
+        assert_eq!((decoded.width, decoded.height), (16, 16));
+        for (out, src) in decoded.pixels.chunks_exact(4).zip(image.pixels.chunks_exact(4)) {
+            assert_eq!(&out[..3], &src[..3]);
+            assert_eq!(out[3], 255);
+        }
+    }
+
+    /// 发送前的出图必须统一是 PNG（手环端固定写 `custom-bg-{code}.png`），
+    /// 原件是 PNG / JPEG / WebP 都一样，且不带 alpha 通道。
+    #[test]
+    fn process_always_emits_png_for_every_source_format() {
+        fn assert_rgb_png(bytes: &[u8]) {
+            assert!(bytes.starts_with(&PNG_MAGIC), "发送前必须是 PNG");
+            let reader = png::Decoder::new(Cursor::new(bytes)).read_info().unwrap();
+            assert_eq!(
+                reader.info().color_type,
+                png::ColorType::Rgb,
+                "发送前的 PNG 不应带 alpha 通道"
+            );
+        }
+
+        // PNG 原件
+        let png_source = encode_png(&gradient(64, 48));
+        assert_rgb_png(&process(&png_source, 20, 3).unwrap());
+
+        // JPEG 原件
+        use base64::Engine;
+        let jpeg_source = base64::engine::general_purpose::STANDARD
+            .decode(SAMPLE_JPEG)
+            .unwrap();
+        assert_rgb_png(&process(&jpeg_source, 0, 0).unwrap());
+
+        // WebP 原件
+        use image_webp::{ColorType, WebPEncoder};
+        let image = gradient(64, 48);
+        let mut webp_source = Vec::new();
+        WebPEncoder::new(&mut webp_source)
+            .encode(&image.pixels, image.width, image.height, ColorType::Rgba8)
+            .unwrap();
+        assert_rgb_png(&process(&webp_source, 5, 2).unwrap());
+    }
+
     #[test]
     fn fit_keeps_small_images_and_caps_large_ones() {
         let small = gradient(100, 100);
@@ -486,6 +656,36 @@ mod tests {
         // ratio = min(432/800, 514/1200) = 0.4283 -> 342 x 514，安卓用 toInt() 截断
         assert_eq!(fitted.width, 342);
         assert_eq!(fitted.height, MAX_IMAGE_HEIGHT);
+    }
+
+    /// 采样比要和安卓 `calculateInSampleSize` 的循环逐档对上
+    #[test]
+    fn in_sample_size_matches_android_loop() {
+        // 小图不采样
+        assert_eq!(calculate_in_sample_size(100, 100, MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT), 1);
+        // 800x1200：half 是 400x600，400 < 432 所以第一档就停，仍按原图缩放
+        assert_eq!(calculate_in_sample_size(800, 1200, MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT), 1);
+        // 4000x3000：half 2000x1500，两档都够大；第三档 1000/4=250 < 514 停
+        assert_eq!(calculate_in_sample_size(4000, 3000, MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT), 4);
+        // 宽扁图只看最小的一边，宽到 8000 也只采到一半
+        assert_eq!(calculate_in_sample_size(8000, 200, MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT), 1);
+    }
+
+    /// 大图走「先采样再缩放」，结果仍不超过手环上限，且尺寸与直接缩放一致
+    #[test]
+    fn decode_and_scale_caps_large_images() {
+        let large = gradient(4000, 3000);
+        let scaled = decode_and_scale(&large, MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT);
+        assert!(scaled.width <= MAX_IMAGE_WIDTH && scaled.height <= MAX_IMAGE_HEIGHT);
+        // 1000x750 采样后按 432/1000 缩放 = 432x324
+        assert_eq!((scaled.width, scaled.height), (432, 324));
+
+        // 采样比为 1 时与直接 fit 完全一致
+        let medium = gradient(800, 1200);
+        assert_eq!(
+            decode_and_scale(&medium, MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT).pixels,
+            fit(&medium, MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT).pixels
+        );
     }
 
     /// 预览统一 1:1：宽图裁左右、高图裁上下，中间内容居中保留

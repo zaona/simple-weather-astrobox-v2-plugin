@@ -42,6 +42,8 @@ impl Reply {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     Idle,
+    /// 手机端正在把手环要的图推过去（对齐安卓 `ImageSyncManager.syncAllImages`）
+    Sending,
     Receiving,
     Saved,
     Clearing,
@@ -54,6 +56,7 @@ impl Phase {
     pub fn as_str(self) -> &'static str {
         match self {
             Phase::Idle => "idle",
+            Phase::Sending => "sending",
             Phase::Receiving => "receiving",
             Phase::Saved => "saved",
             Phase::Clearing => "clearing",
@@ -112,6 +115,17 @@ pub fn progress() -> Progress {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clone()
+}
+
+/// 覆盖整份进度快照。发送流程（[`crate::bg::sync`]）与接收流程共用同一份，
+/// 背景图页那张「背景图传输」卡片只认它。
+pub fn set_progress(next: Progress) {
+    update_progress(|progress| *progress = next);
+}
+
+/// 是否有一张图在收或发，UI 用它决定要不要显示「取消传输」
+pub fn is_transferring() -> bool {
+    matches!(progress().phase, Phase::Receiving | Phase::Sending)
 }
 
 /// 是否正在接收一张图片

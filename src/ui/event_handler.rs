@@ -14,6 +14,7 @@ pub const TAB_PASTE_EVENT: &str = "tab_paste";
 pub const TAB_BACKGROUND_EVENT: &str = "tab_background";
 pub const TAB_SETTINGS_EVENT: &str = "tab_settings";
 pub const BG_CANCEL_EVENT: &str = "bg_cancel";
+pub const BG_SEND_EVENT: &str = "bg_send";
 pub const BG_CLEAR_ALL_EVENT: &str = "bg_clear_all";
 pub const BG_DARKEN_SLIDER_EVENT: &str = "bg_darken_slider";
 pub const BG_BLUR_SLIDER_EVENT: &str = "bg_blur_slider";
@@ -107,8 +108,11 @@ pub async fn ui_event_processor(event_type: ui::Event, event_id: &str, event_pay
         BG_DARKEN_SLIDER_EVENT => apply_background_slider(true, parse_event_value(event_payload)),
         BG_BLUR_SLIDER_EVENT => apply_background_slider(false, parse_event_value(event_payload)),
         BG_CANCEL_EVENT => {
-            crate::bg::cancel_active();
+            crate::bg::cancel_active().await;
             crate::ui::build::rerender_main_ui();
+        }
+        BG_SEND_EVENT => {
+            send_background_images().await;
         }
         BG_CLEAR_ALL_EVENT => {
             if !confirm(
@@ -503,6 +507,39 @@ async fn export_preset_package() {
             show_alert("导出失败", &reason).await;
         }
     }
+}
+
+/// 「发送到手表」按钮，对齐安卓 `BackgroundImagePickerActivity.performSync`：
+/// 有已配置的图就覆盖式同步全部；一张都没有时先确认，再清除手表上已存的自定义背景图。
+async fn send_background_images() {
+    if crate::bg::sync::is_active() {
+        tracing::info!("已有背景图传输在进行，忽略发送请求");
+        return;
+    }
+
+    if crate::bg::saved_codes().is_empty() {
+        let confirmed = confirm(
+            "确认清除",
+            "当前没有选择任何背景图，继续将会删除手表上已存储的所有自定义背景图。确定继续吗？",
+            "继续",
+        )
+        .await;
+        if !confirmed {
+            return;
+        }
+        if let Err(reason) = crate::bg::sync::clear_all_on_watch().await {
+            tracing::warn!("清除手表自定义背景图失败: {}", reason);
+            show_alert("清除失败", &reason).await;
+            return;
+        }
+        // 手环那份清掉了，本机库没动，卡片上已显示清除结果
+        crate::ui::build::rerender_main_ui();
+        return;
+    }
+
+    // 推送放到定时器里跑：UI 事件立即返回，传输期间仍能收手环回执
+    crate::bg::schedule_push();
+    crate::ui::build::rerender_main_ui();
 }
 
 /// 通用确认框，点确认返回 true

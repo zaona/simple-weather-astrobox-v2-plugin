@@ -128,14 +128,18 @@ fn action_entry(icon_svg: String, label: &str, event_id: &str, color: &str) -> u
 
 /// 使用说明。写的是插件端真实行为，不照搬安卓端那套（端上选图 + 与快应用两套独立存储）。
 fn build_guide() -> ui::Element {
-    let sections: [(&str, &str); 9] = [
+    let sections: [(&str, &str); 10] = [
         (
             "两种图片来源",
-            "① 端上选图：点没有背景图的卡片（或移动端整行）打开系统文件选择器，支持 PNG / JPG / WEBP，单张上限 12 MB。② 手机端推图：手机「自定义背景图」页点同步，覆盖式传到本插件。两者共用同一份存储，先到先生效。",
+            "① 端上选图：点没有背景图的卡片（或移动端整行）打开系统文件选择器，支持 PNG / JPG / WEBP，单张上限 12 MB。② 手机端推图：手机「自定义背景图」页点同步，直接覆盖式传到手环。两条路各存各的，互不影响。",
         ),
         (
             "已配置的样子",
             "每条只有右侧按钮可点：没图时是 ＋，点它挑一张导入；已有图时是 ✕，删除并恢复默认（二次确认），删完这一条回到未配置，再点 ＋ 导入新的。条目样式两端一致，窄屏排一列、宽屏排多列。",
+        ),
+        (
+            "发送到手表",
+            "顶部「背景图传输」卡片里那颗「发送到手表」会把当前已配置的图按压暗 / 模糊重新出一遍，再逐张覆盖式传给手环，与安卓端「覆盖传输模式」一致。传输中同一个位置变成「取消传输」；手环上点取消也会立刻中止整轮。一张图都没配置时点发送会先二次确认，确认后清除手环上已存的自定义背景图（本机库不动）。",
         ),
         (
             "删除即恢复默认",
@@ -143,7 +147,7 @@ fn build_guide() -> ui::Element {
         ),
         (
             "压暗与模糊",
-            "两个滑块范围都是 0-100，且是全局参数——改一次会按新参数重算所有已配置的背景图，右上状态卡会显示重算进度。",
+            "两个滑块范围都是 0-100，且是全局参数——改一次会按新参数重算所有已配置的背景图，右上状态卡会显示重算进度。改完记得点一次「发送到手表」，手环那份才会跟着更新。",
         ),
         (
             "画质固定",
@@ -154,8 +158,8 @@ fn build_guide() -> ui::Element {
             "每张图存两份：bg/source-* 是你选的原始图片，bg/custom-bg-* 是按当前参数算出来的成品。滑块永远从原件重算，所以参数往回调不会把图越调越糊。",
         ),
         (
-            "手机端推图的生效时机",
-            "本插件侧收到就立刻可见；但手环快应用那侧的壁纸需要退出快应用再重新进入才刷新，若覆盖的是已有背景图，可能还要重启手环清图片缓存。",
+            "发送后的生效时机",
+            "发送完成后本机立刻可见；手环快应用那侧的壁纸需要退出快应用再重新进入才刷新，若覆盖的是已有的自定义背景图，可能还要重启手环清图片缓存。",
         ),
         (
             "导入 / 导出预设包",
@@ -253,7 +257,8 @@ fn build_guide() -> ui::Element {
 /// 传输状态：文案对齐手环端 `image-service.js` 的 message
 fn build_transfer_card() -> ui::Element {
     let progress = crate::bg::session::progress();
-    let receiving = progress.phase == crate::bg::session::Phase::Receiving;
+    // 收图和推图共用这张卡：只要有传输在进行就显示进度与「取消传输」
+    let receiving = crate::bg::session::is_transferring();
 
     let percent = if progress.total_chunks > 0 {
         progress.received.saturating_mul(100) / progress.total_chunks
@@ -295,6 +300,14 @@ fn build_transfer_card() -> ui::Element {
             BG_CANCEL_EVENT,
             "#FF453A26",
             DANGER,
+        ));
+    } else {
+        // 空闲时同一个位置就是「发送到手表」：对齐安卓背景图页右下角那颗发送按钮
+        row = row.child(build_small_button(
+            "发送到手表",
+            BG_SEND_EVENT,
+            "#0090FF26",
+            ACCENT,
         ));
     }
     row

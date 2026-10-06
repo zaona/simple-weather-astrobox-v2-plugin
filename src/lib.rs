@@ -27,11 +27,13 @@ impl event::Guest for MyPlugin {
 
         match event_type {
             event::EventType::InterconnectMessage => {
-                if let Some(reply) = bg::handle_message(&event_payload) {
-                    ui::on_background_transfer_committed(&reply);
-                    bg::send_reply(reply).await;
-                } else {
-                    ui::handle_interconnect_message(&event_payload);
+                match bg::handle_message(&event_payload) {
+                    bg::Handled::Reply(reply) => {
+                        ui::on_background_transfer_committed(&reply);
+                        bg::send_reply(reply).await;
+                    }
+                    bg::Handled::Ack => {}
+                    bg::Handled::Ignored => ui::handle_interconnect_message(&event_payload),
                 }
             }
             event::EventType::Timer => {
@@ -39,6 +41,9 @@ impl event::Guest for MyPlugin {
                     if let Some(payload) = json.get("payload").and_then(|v| v.as_str()) {
                         if device_report::is_report_timer_payload(payload) {
                             device_report::report_connected_device().await;
+                        } else if bg::is_push_timer_payload(payload) {
+                            // 首页改动触发的背景图推送：单独一条任务，期间仍能收手环回执
+                            bg::run_scheduled_push().await;
                         } else if bg::is_register_timer_payload(payload) {
                             bg::register_recv().await;
                         } else if bg::is_apply_timer_payload(payload) {
@@ -59,7 +64,11 @@ impl event::Guest for MyPlugin {
                 }
             }
             _ => {
-                tracing::info!("Unhandled event type: {:?}", event_type);
+                tracing::info!(
+                    "Unhandled event type: {:?}, payload: {}",
+                    event_type,
+                    event_payload
+                );
             }
         }
 
