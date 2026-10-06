@@ -24,6 +24,8 @@ const ROW_THUMB_SIZE: u32 = 40;
 const ACTION_MIN_COLUMN: u32 = 180;
 /// 压暗 / 模糊两张卡片的最小列宽，排不下两张时自然叠成一列
 const EDIT_CARD_MIN_COLUMN: u32 = 240;
+/// 说明 / 导入 / 导出外面那层卡片的内边距
+const ACTION_CARD_PADDING: u32 = 8;
 
 /// 传输状态那行的固定高度（单行 13px 文字）
 const STATUS_LINE_HEIGHT: u32 = 18;
@@ -80,13 +82,16 @@ fn build_preset_card(state: &UiState) -> ui::Element {
         if has_images { ACCENT } else { "#636366" },
     );
 
-    build_card().padding(8).child(
+    build_card().padding(ACTION_CARD_PADDING).child(
         ui::Element::new(ui::ElementType::Grid, None)
             .width_full()
             .prop(
                 "columns",
-                // auto-fit：条目不足一整行时折叠空轨道，让现有条目平摊整宽
-                &format!("repeat(auto-fit, minmax({}px, 1fr))", ACTION_MIN_COLUMN),
+                // min(…, 100%)：容器比最小列宽还窄时不会被钉在最小宽度上
+                &format!(
+                    "repeat(auto-fit, minmax(min({}px, 100%), 1fr))",
+                    ACTION_MIN_COLUMN
+                ),
             )
             .prop("gap", &format!("{}px", crate::ui::state::ROW_COLUMN_GAP))
             .child(guide)
@@ -333,7 +338,7 @@ fn build_edit_card(state: &UiState) -> ui::Element {
         .prop(
             "columns",
             &format!(
-                "repeat(auto-fit, minmax({}px, 1fr))",
+                "repeat(auto-fit, minmax(min({}px, 100%), 1fr))",
                 EDIT_CARD_MIN_COLUMN
             ),
         )
@@ -419,7 +424,7 @@ fn build_code_list_card(state: &UiState) -> ui::Element {
         .prop(
             "columns",
             &format!(
-                "repeat(auto-fit, minmax({}px, 1fr))",
+                "repeat(auto-fit, minmax(min({}px, 100%), 1fr))",
                 crate::ui::state::ROW_MIN_COLUMN
             ),
         )
