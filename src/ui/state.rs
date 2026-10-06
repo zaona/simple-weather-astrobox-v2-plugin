@@ -39,7 +39,8 @@ pub struct UiState {
     pub bg_blur: u32,
     /// 对齐安卓 `bg_quality`。插件端出图固定 RGB_565，这个值只随预设包往来
     pub bg_quality: u32,
-    /// 对齐安卓 `advanced_sync_mode`。插件端无对应功能，同样只随预设包往来
+    /// 对齐安卓 `advanced_sync_mode`：推送背景图前是否拉起快应用并握手。
+    /// 属于本机设置，不进 `.swbg` 预设包
     pub bg_advanced_sync_mode: bool,
     /// 选图对话框是否正在进行，挡住重复派发的选图事件
     pub bg_pick_in_progress: bool,

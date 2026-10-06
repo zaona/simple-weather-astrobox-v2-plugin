@@ -19,6 +19,10 @@ use crate::astrobox::psys_host_v4::ui;
 
 /// 滑块量程，与安卓 `valueRange = 0f..100f` 一致
 const SLIDER_MAX: u32 = 100;
+/// 压暗 / 模糊卡片里图标与名称同排，和 15 号名称搭配用 20 更贴（安卓端也是 20dp）
+const SLIDER_ICON_SIZE: u32 = 20;
+/// 滑块自身上下额外留的间隔，叠在卡片的 10 间距上
+const SLIDER_EXTRA_GAP: u32 = 4;
 const ROW_THUMB_SIZE: u32 = 40;
 /// 说明 / 导入 / 导出三个条目的最小列宽，和列表一样按宽度自动决定列数
 const ACTION_MIN_COLUMN: u32 = 180;
@@ -54,7 +58,7 @@ pub fn build_bg_tab(state: &UiState) -> ui::Element {
         .child(super::build::build_section_title("图片处理"))
         .child(build_edit_card(state).margin_bottom(10))
         .child(super::build::build_section_title(&format!(
-            "已配置 {}/12 张",
+            "已配置 {}/12 张背景图",
             state.bg_codes.len()
         )))
         .child(build_code_list_card(state))
@@ -131,48 +135,46 @@ fn action_entry(icon_svg: String, label: &str, event_id: &str, color: &str) -> u
         )
 }
 
-/// 使用说明。写的是插件端真实行为，不照搬安卓端那套（端上选图 + 与快应用两套独立存储）。
+/// 使用说明子页：文案与安卓端 `BackgroundImagePickerActivity` 的帮助面板一致，
+/// 只有指路的地方按插件自己的控件改写（发送按钮在状态卡右侧、导入导出是两个入口）。
 fn build_guide() -> ui::Element {
+    // 内容与安卓端 `BackgroundImagePickerActivity` 的帮助面板逐条一致，
+    // 只有指路的部分按插件实际控件改写（发送按钮在状态卡右侧、导入导出是两个入口）。
+    // 空标题的行是多段/多行的续行，渲染时不再重复小标题。
     let sections: [(&str, &str); 10] = [
         (
-            "两种图片来源",
-            "① 端上选图：点没有背景图的卡片（或移动端整行）打开系统文件选择器，支持 PNG / JPG / WEBP，单张上限 12 MB。② 手机端推图：手机「自定义背景图」页点同步，直接覆盖式传到手环。两条路各存各的，互不影响。",
+            "选择背景图",
+            "点击每种天气类型右侧的 + 按钮，从相册中选择一张图片作为该天气的自定义背景。支持 12 种天气类型，每种可单独设置。",
         ),
         (
-            "已配置的样子",
-            "每条只有右侧按钮可点：没图时是 ＋，点它挑一张导入；已有图时是 ✕，删除并恢复默认（二次确认），删完这一条回到未配置，再点 ＋ 导入新的。条目样式两端一致，窄屏排一列、宽屏排多列。",
+            "同步到手表",
+            "配置好背景图后，点击「背景图传输」卡片右侧的发送按钮即可将所有背景图同步到手表端。同步过程中请不要操作手表。",
         ),
         (
-            "发送到手表",
-            "顶部「背景图传输」卡片里那颗「发送到手表」会把当前已配置的图按压暗 / 模糊重新出一遍，再逐张覆盖式传给手环，与安卓端「覆盖传输模式」一致。传输中同一个位置变成「取消传输」；手环上点取消也会立刻中止整轮。一张图都没配置时点发送会先二次确认，确认后清除手环上已存的自定义背景图（本机库不动）。",
+            "传输说明",
+            "背景图同步采用覆盖传输模式，每次同步会将所有已配置的图片重新发送到手表端。如果同步过程中某张图片传输失败，你可以暂时删除其他已成功传输的图片，仅保留失败的那一张，然后再次点击发送单独重传该图片即可，无需全部重新传输。",
         ),
         (
-            "删除即恢复默认",
-            "✕ 会连同原始图片一起删除（删除前二次确认，不可撤销），删完这一格回到未配置状态。注意：删除只影响本插件，手机端和手环快应用各自的副本不受影响。",
-        ),
-        (
-            "压暗与模糊",
-            "两个滑块范围都是 0-100，且是全局参数——改一次会按新参数重算所有已配置的背景图，右上状态卡会显示重算进度。改完记得点一次「发送到手表」，手环那份才会跟着更新。",
-        ),
-        (
-            "画质固定",
-            "出图统一按 RGB_565 量化后存 PNG，不提供画质滑块（安卓端的「画质」参数导入时会读入但不参与处理），这样传输体积和渲染开销都是稳定的。",
-        ),
-        (
-            "原件与成品",
-            "每张图存两份：bg/source-* 是你选的原始图片，bg/custom-bg-* 是按当前参数算出来的成品。滑块永远从原件重算，所以参数往回调不会把图越调越糊。",
-        ),
-        (
-            "发送后的生效时机",
-            "发送完成后本机立刻可见；手环快应用那侧的壁纸需要退出快应用再重新进入才刷新，若覆盖的是已有的自定义背景图，可能还要重启手环清图片缓存。",
+            "",
+            "传输完成后，请退出手表端应用再重新进入，才能看到新背景效果。若覆盖的是手表上已有的自定义背景图，因设备图片缓存问题，还需重启手环刷新缓存后才会显示新图。",
         ),
         (
             "导入 / 导出预设包",
-            "预设包是 .swbg 文件（本质是 ZIP：manifest.json + images/），导出走系统保存对话框、导入走系统文件选择器。包里存的是原始图片和参数，所以来回导不会掉画质；本插件导的包手机端能直接导入，反之亦然。",
+            "点击「导入预设包」或「导出预设包」可导入 / 导出 .swbg 格式的预设包，方便备份和分享。",
         ),
         (
-            "为什么没有分享按钮",
-            "宿主给插件的接口里没有系统分享能力（只有保存文件到本地），所以分享被做成了「导出预设包」：存到本地后自行发送。插件与手机端共享同一份预设包格式。",
+            "分享预设包",
+            "将当前所有背景配置打包分享给其他人，对方可直接导入使用。",
+        ),
+        ("图片处理参数", "· 压暗：调整背景图亮度，数值越大越暗。"),
+        ("", "· 模糊：对背景图应用高斯模糊效果。"),
+        (
+            "",
+            "同步到手表时会自动压缩画质以加快传输。调节滑块后可实时预览效果。",
+        ),
+        (
+            "清除背景图",
+            "若所有天气都未选图，点击同步按钮会弹出清除确认，可将手表端已存储的自定义背景图全部清除，恢复默认背景。",
         ),
     ];
 
@@ -200,7 +202,7 @@ fn build_guide() -> ui::Element {
         .gap(8)
         .margin_bottom(8)
         .child(back_btn)
-        .child(ui::Element::new(ui::ElementType::P, Some("使用说明")).size(17));
+        .child(ui::Element::new(ui::ElementType::P, Some("自定义背景图指南")).size(17));
 
     // 条目列表沿用位置历史 / 搜索结果那套容器与行距
     let mut list = ui::Element::new(ui::ElementType::Div, None)
@@ -215,40 +217,24 @@ fn build_guide() -> ui::Element {
         .padding_bottom(4);
 
     for (title, body) in sections {
-        list = list.child(
-            ui::Element::new(ui::ElementType::Div, None)
-                .flex()
-                .flex_direction(ui::FlexDirection::Column)
-                .width_full()
-                .padding_top(10)
-                .padding_bottom(10)
-                .gap(2)
-                .child(ui::Element::new(ui::ElementType::P, Some(title)).size(15))
-                .child(
-                    ui::Element::new(ui::ElementType::P, Some(body))
-                        .size(13)
-                        .text_color("#888888"),
-                ),
-        );
-    }
-
-    // 完整文档入口也做成同样的一行，不再单独一颗按钮
-    list = list.child(
-        ui::Element::new(ui::ElementType::Div, None)
+        // 续行（空标题）贴着上一段，不再重复小标题
+        let mut row = ui::Element::new(ui::ElementType::Div, None)
             .flex()
-            .flex_direction(ui::FlexDirection::Row)
-            .align_center()
-            .justify_center()
+            .flex_direction(ui::FlexDirection::Column)
             .width_full()
-            .padding_top(10)
+            .padding_top(if title.is_empty() { 2 } else { 10 })
             .padding_bottom(10)
-            .on(ui::Event::Click, OPEN_HELP_DOC_EVENT)
-            .child(
-                ui::Element::new(ui::ElementType::P, Some("打开完整文档"))
-                    .size(15)
-                    .text_color(ACCENT),
-            ),
-    );
+            .gap(2);
+        if !title.is_empty() {
+            row = row.child(ui::Element::new(ui::ElementType::P, Some(title)).size(15));
+        }
+        row = row.child(
+            ui::Element::new(ui::ElementType::P, Some(body))
+                .size(13)
+                .text_color("#888888"),
+        );
+        list = list.child(row);
+    }
 
     ui::Element::new(ui::ElementType::Div, None)
         .flex()
@@ -262,8 +248,8 @@ fn build_guide() -> ui::Element {
 /// 传输状态：文案对齐手环端 `image-service.js` 的 message
 fn build_transfer_card() -> ui::Element {
     let progress = crate::bg::session::progress();
-    // 收图和推图共用这张卡：只要有传输在进行就显示进度与「取消传输」
-    let receiving = crate::bg::session::is_transferring();
+    // 收图和推图共用这张卡：左侧状态、右侧一颗圆形动作按钮（发送 / 取消）
+    let transferring = crate::bg::session::is_transferring();
 
     let percent = if progress.total_chunks > 0 {
         progress.received.saturating_mul(100) / progress.total_chunks
@@ -271,7 +257,7 @@ fn build_transfer_card() -> ui::Element {
         0
     };
     // 重算进度不展示：分帧跑完很快，卡片高度保持固定即可
-    let detail = if receiving {
+    let detail = if transferring {
         format!(
             "{}  {}/{}  {}%",
             progress.message, progress.received, progress.total_chunks, percent
@@ -282,40 +268,53 @@ fn build_transfer_card() -> ui::Element {
         progress.message.clone()
     };
 
-    let mut row = build_card().child(
-        ui::Element::new(ui::ElementType::Div, None)
-            .flex()
-            .flex_direction(ui::FlexDirection::Column)
-            .width_full()
-            .gap(2)
-            .child(ui::Element::new(ui::ElementType::P, Some("背景图传输")).size(15))
-            // 固定单行高度：文案在"等待/接收/重算/完成"之间切换时不撑高卡片，
-            // 否则下面的"已配置 N/12"会被顶得上下跳
-            .child(
-                ui::Element::new(ui::ElementType::P, Some(&detail))
-                    .size(13)
-                    .height(STATUS_LINE_HEIGHT)
-                    .text_color(if receiving { ACCENT } else { MUTED }),
-            ),
-    );
+    let text_col = ui::Element::new(ui::ElementType::Div, None)
+        .flex()
+        .flex_direction(ui::FlexDirection::Column)
+        .flex_grow(1.0)
+        .gap(2)
+        .child(ui::Element::new(ui::ElementType::P, Some("背景图传输")).size(15))
+        // 固定单行高度：文案在"等待/接收/重算/完成"之间切换时不撑高卡片，
+        // 否则下面的"已配置 N/12"会被顶得上下跳
+        .child(
+            ui::Element::new(ui::ElementType::P, Some(&detail))
+                .size(13)
+                .height(STATUS_LINE_HEIGHT)
+                .text_color(if transferring { ACCENT } else { MUTED }),
+        );
 
-    if receiving {
-        row = row.child(build_small_button(
-            "取消传输",
-            BG_CANCEL_EVENT,
-            "#FF453A26",
-            DANGER,
-        ));
+    let action = if transferring {
+        build_round_action(icons::x_svg(), BG_CANCEL_EVENT, "#FF453A26", DANGER)
     } else {
-        // 空闲时同一个位置就是「发送到手表」：对齐安卓背景图页右下角那颗发送按钮
-        row = row.child(build_small_button(
-            "发送到手表",
-            BG_SEND_EVENT,
-            "#0090FF26",
-            ACCENT,
-        ));
-    }
-    row
+        build_round_action(icons::send_tab_svg(), BG_SEND_EVENT, "#0090FF26", ACCENT)
+    };
+
+    build_card()
+        .flex_direction(ui::FlexDirection::Row)
+        .align_center()
+        .child(text_col)
+        .child(action)
+}
+
+/// 状态卡右侧的圆形动作按钮：空闲是「发送到手表」，传输中是「取消传输」。
+/// 比列表里的图标按钮大一号（40 / 20），当作这一页的主操作。
+fn build_round_action(icon_svg: String, event_id: &str, bg: &str, color: &str) -> ui::Element {
+    let icon = ui::Element::new(ui::ElementType::Svg, Some(&icon_svg))
+        .width(20)
+        .height(20)
+        .text_color(color);
+
+    ui::Element::new(ui::ElementType::Button, None)
+        .without_default_styles()
+        .on(ui::Event::Click, event_id)
+        .radius(999)
+        .width(40)
+        .height(40)
+        .bg(bg)
+        .flex()
+        .align_center()
+        .justify_center()
+        .child(icon)
 }
 
 /// 图片处理：压暗 + 模糊，两项各自一张卡片，列数随宽度自适应
@@ -347,38 +346,25 @@ fn build_edit_card(state: &UiState) -> ui::Element {
         .child(blur)
 }
 
-/// 单项设置卡片：图标在左，右侧上下排布「名称 + 数值」和滑块。
-/// 图标尺寸、文字样式与内边距都对齐设置列表的卡片。
+/// 单项设置卡片：图标与名称同一行，滑块在下面占满整行（不露具体数值，与安卓端一致）。
+/// 图标 20 与 15 号名称同排更贴，文字样式和内边距沿用设置列表的卡片。
 fn build_slider_row(icon_svg: String, label: &str, value: u32, event_id: &str) -> ui::Element {
-    let value_text = value.to_string();
     let max_prop = SLIDER_MAX.to_string();
     let value_prop = value.to_string();
 
     let icon = ui::Element::new(ui::ElementType::Svg, Some(&icon_svg))
-        .width(22)
-        .height(22)
+        .width(SLIDER_ICON_SIZE)
+        .height(SLIDER_ICON_SIZE)
         .text_color("#FFFFFF");
-
-    let icon_wrap = ui::Element::new(ui::ElementType::Div, None)
-        .width(22)
-        .height(22)
-        .flex()
-        .align_center()
-        .justify_center()
-        .child(icon);
 
     let title_row = ui::Element::new(ui::ElementType::Div, None)
         .flex()
         .flex_direction(ui::FlexDirection::Row)
         .align_center()
         .width_full()
-        .child(ui::Element::new(ui::ElementType::P, Some(label)).size(15))
-        .child(build_spacer())
-        .child(
-            ui::Element::new(ui::ElementType::P, Some(&value_text))
-                .size(13)
-                .text_color("#BBBBBB"),
-        );
+        .gap(10)
+        .child(icon)
+        .child(ui::Element::new(ui::ElementType::P, Some(label)).size(15));
 
     let slider = ui::Element::new(ui::ElementType::Slider, None)
         .width_full()
@@ -392,18 +378,21 @@ fn build_slider_row(icon_svg: String, label: &str, value: u32, event_id: &str) -
         .prop("size", "2")
         .on(ui::Event::Change, event_id);
 
-    let text_col = ui::Element::new(ui::ElementType::Div, None)
+    // 滑块自身上下左右各多留一点：上下靠外边距，左右靠内边距（宽度撑满的容器加左右
+    // 外边距会溢出，用内边距不会）
+    let slider_row = ui::Element::new(ui::ElementType::Div, None)
         .flex()
         .flex_direction(ui::FlexDirection::Column)
-        .flex_grow(1.0)
-        .gap(10)
-        .child(title_row)
+        .width_full()
+        .margin_top(SLIDER_EXTRA_GAP)
+        .margin_bottom(SLIDER_EXTRA_GAP)
+        .padding_left(SLIDER_EXTRA_GAP)
+        .padding_right(SLIDER_EXTRA_GAP)
         .child(slider);
 
     ui::Element::new(ui::ElementType::Div, None)
         .flex()
-        .flex_direction(ui::FlexDirection::Row)
-        .align_center()
+        .flex_direction(ui::FlexDirection::Column)
         .width_full()
         .bg(CARD_BG)
         .radius(18)
@@ -412,8 +401,8 @@ fn build_slider_row(icon_svg: String, label: &str, value: u32, event_id: &str) -
         .padding_top(10)
         .padding_bottom(10)
         .gap(10)
-        .child(icon_wrap)
-        .child(text_col)
+        .child(title_row)
+        .child(slider_row)
 }
 
 /// 12 个天气编号的列表：每项自成一张卡片，按宽度自适应列数
@@ -529,29 +518,6 @@ fn build_card() -> ui::Element {
         .radius(18)
         .padding(14)
         .gap(10)
-}
-
-fn build_spacer() -> ui::Element {
-    ui::Element::new(ui::ElementType::Div, None)
-        .flex_grow(1.0)
-        .child(ui::Element::new(ui::ElementType::Div, None))
-}
-
-fn build_small_button(label: &str, event_id: &str, bg: &str, text_color: &str) -> ui::Element {
-    ui::Element::new(ui::ElementType::Button, None)
-        .without_default_styles()
-        .on(ui::Event::Click, event_id)
-        .radius(16)
-        .padding_top(8)
-        .padding_bottom(8)
-        .padding_left(14)
-        .padding_right(14)
-        .bg(bg)
-        .text_color(text_color)
-        .flex()
-        .align_center()
-        .justify_center()
-        .child(ui::Element::new(ui::ElementType::Span, Some(label)).size(13))
 }
 
 /// 圆形图标按钮的外观，不绑事件，作为可点区域里的视觉提示

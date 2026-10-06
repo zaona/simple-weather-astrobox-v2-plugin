@@ -451,7 +451,7 @@ async fn import_preset_package() {
                 state.bg_darken = summary.darken;
                 state.bg_blur = summary.blur;
                 state.bg_quality = summary.quality;
-                state.bg_advanced_sync_mode = summary.advanced_sync_mode;
+                // advancedSyncMode 是本机设置，不进预设包，导入时也不动它
                 state.bg_codes = crate::bg::saved_codes();
                 state.bg_thumbs.clear();
             }
@@ -483,19 +483,14 @@ async fn import_preset_package() {
 
 /// 导出 `.swbg` 预设包
 async fn export_preset_package() {
-    let (darken, blur, quality, advanced_sync_mode) = {
+    let (darken, blur, quality) = {
         let state = ui_state()
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        (
-            state.bg_darken,
-            state.bg_blur,
-            state.bg_quality,
-            state.bg_advanced_sync_mode,
-        )
+        (state.bg_darken, state.bg_blur, state.bg_quality)
     };
 
-    match crate::bg::preset::export_to_disk(darken, blur, quality, advanced_sync_mode).await {
+    match crate::bg::preset::export_to_disk(darken, blur, quality).await {
         Ok(()) => {
             show_alert("导出成功", "预设包已保存到你选择的位置").await;
         }

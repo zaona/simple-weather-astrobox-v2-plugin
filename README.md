@@ -40,10 +40,11 @@ com.application.zaona.weather
 432×514 → 模糊 → 压暗 → RGB_565 量化 → PNG」，发完 `end` 后等手环回 `image_saved`，
 超时 30 秒；手环中途回 `cancel`（手环上按了「取消传输」）立即中止整轮。
 
-背景图页顶部那张「背景图传输」卡片就是安卓端发送按钮的位置：空闲时是「发送到手表」，
-点它把当前已配置的图覆盖式推一遍（端上选图 / 导入预设包 / 改完压暗模糊之后都要点
-一次才会同步到手环）；传输中变成「取消传输」，手环上点取消也会立刻中止整轮。
-一张图都没配置时点发送会先二次确认，确认后清除手环上已存的自定义背景图（本机库不动）。
+背景图页「背景图传输」卡片右侧那颗圆形按钮（纸飞机图标）就是「发送到手表」，点它把当前
+已配置的图覆盖式推一遍（端上选图 / 导入预设包 / 改完压暗模糊之后都要点一次才会同步到手环）；
+传输中它变成红色圆形 ✕，点它取消传输，手环上点取消也会立刻中止整轮。卡片左侧始终显示
+进度与分片百分比。一张图都没配置时点发送会先二次确认，确认后清除手环上已存的自定义背景图
+（本机库不动）。
 
 12 个天气编号：晴-白天/夜晚/日落（21/22/23）、多云-白天/阴-夜晚（11/12）、
 阴-白天（31）、雾霾-白天/夜晚（41/42）、雨-白天/夜晚（51/52）、雪-白天/夜晚（61/62）。
@@ -67,7 +68,7 @@ api_settings.json          插件设置，含压暗与模糊
 ```text
 manifest.json
   formatVersion / appVersion / exportTimestamp / metadata
-  globalSettings: { darkenStrength, blurRadius, quality, advancedSyncMode }
+  globalSettings: { darkenStrength, blurRadius, quality }
   presets[]: { weatherCode, weatherLabel, imageFile, imageFormat,
                originalFileName, settings: { darkenStrength, blurRadius, quality } }
 images/{code}.{ext}       原始图片，不是成品图（条目名以包内实际命名为准）
@@ -75,8 +76,9 @@ images/{code}.{ext}       原始图片，不是成品图（条目名以包内实
 
 包里存的是原件加参数，所以来回导不会掉画质。导入时按码表顺序读 `images/`
 下的条目，编号取自条目文件名；`globalSettings` 会覆盖插件本地的压暗 / 模糊。
-`quality` 与 `advancedSyncMode` 插件端不参与处理（画质固定 RGB_565），但会
-原样存下来，再次导出时带回，保证和安卓来回导不丢设置。
+`quality` 两端都只存不用（出图固定 RGB_565），会原样存下来、再次导出时带回；
+`advancedSyncMode` 属于本机设置，不进预设包，早期版本导出的包里带的这个字段
+导入时会被忽略，不影响解析。
 
 解码支持的格式与安卓 `BitmapFactory` 的常用子集一致：PNG / JPEG / WebP
 （动图取第一帧）。打包里若有解码不了的原件，会在导入结果里计入「跳过」。
