@@ -8,8 +8,9 @@
 //! ```
 //!
 //! 导出的是**原件**加参数，导入时按参数重新出成品图，所以两边来回导不会把画质越导越差。
-//! `quality` 两端都只存不用（出图固定 RGB_565）；`advancedSyncMode` 属于本机设置，
-//! 不进预设包——早期版本导出的包里带过这个字段，serde 默认忽略未知字段，导入照样能读。
+//! 包里只放处理参数（压暗 / 模糊）：`quality` 两端都只存不用（出图固定 RGB_565），
+//! `advancedSyncMode` 属于本机设置——这两个字段都不再进预设包；早期版本导出的包里带过
+//! 它们，serde 默认忽略未知字段，导入照样能读。
 
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Write};
@@ -26,8 +27,6 @@ const MANIFEST_ENTRY: &str = "manifest.json";
 const IMAGES_DIR: &str = "images/";
 /// 导出对话框的默认文件名，与安卓端 `CreateDocument` 的初始名一致
 const DEFAULT_EXPORT_NAME: &str = "weather_backgrounds.swbg";
-/// 与安卓端 `GlobalSettings.quality` 的默认值一致
-const DEFAULT_QUALITY: u32 = 85;
 
 /// 导入结果摘要，用于弹窗告知用户
 #[derive(Debug, Clone)]
@@ -36,8 +35,6 @@ pub struct ImportSummary {
     pub skipped: usize,
     pub darken: u32,
     pub blur: u32,
-    /// 包里的 `quality`，插件端不参与出图，只原样存下来供再次导出
-    pub quality: u32,
 }
 
 impl Default for ImportSummary {
@@ -47,7 +44,6 @@ impl Default for ImportSummary {
             skipped: 0,
             darken: 0,
             blur: 0,
-            quality: DEFAULT_QUALITY,
         }
     }
 }
@@ -60,8 +56,6 @@ struct PresetSettings {
     darken_strength: u32,
     #[serde(default)]
     blur_radius: u32,
-    #[serde(default = "default_quality")]
-    quality: u32,
 }
 
 impl Default for PresetSettings {
@@ -69,7 +63,6 @@ impl Default for PresetSettings {
         PresetSettings {
             darken_strength: 0,
             blur_radius: 0,
-            quality: DEFAULT_QUALITY,
         }
     }
 }
@@ -81,12 +74,6 @@ struct GlobalSettings {
     darken_strength: u32,
     #[serde(default)]
     blur_radius: u32,
-    #[serde(default = "default_quality")]
-    quality: u32,
-}
-
-fn default_quality() -> u32 {
-    DEFAULT_QUALITY
 }
 
 impl Default for GlobalSettings {
@@ -94,7 +81,6 @@ impl Default for GlobalSettings {
         GlobalSettings {
             darken_strength: 0,
             blur_radius: 0,
-            quality: DEFAULT_QUALITY,
         }
     }
 }
@@ -133,8 +119,8 @@ struct PresetManifest {
 }
 
 /// 把当前已配置的背景图打包成 `.swbg` 字节。
-/// 只写处理参数：`advancedSyncMode` 是本机设置，不随包走。
-pub fn export(darken: u32, blur: u32, quality: u32) -> Result<Vec<u8>, String> {
+/// 只写处理参数（压暗 / 模糊）：`quality`、`advancedSyncMode` 都不随包走。
+pub fn export(darken: u32, blur: u32) -> Result<Vec<u8>, String> {
     let metas = super::store::metas();
 
     // 与安卓一致：按码表顺序导出已配置的编号，而不是按落盘顺序
@@ -150,7 +136,6 @@ pub fn export(darken: u32, blur: u32, quality: u32) -> Result<Vec<u8>, String> {
     let global_settings = GlobalSettings {
         darken_strength: darken,
         blur_radius: blur,
-        quality,
     };
 
     let mut presets = Vec::new();
@@ -182,7 +167,6 @@ pub fn export(darken: u32, blur: u32, quality: u32) -> Result<Vec<u8>, String> {
             settings: PresetSettings {
                 darken_strength: darken,
                 blur_radius: blur,
-                quality,
             },
         });
     }
@@ -290,7 +274,6 @@ pub fn import(bytes: &[u8]) -> Result<ImportSummary, String> {
     let mut summary = ImportSummary {
         darken,
         blur,
-        quality: global.quality,
         ..ImportSummary::default()
     };
 
@@ -361,10 +344,10 @@ pub fn import(bytes: &[u8]) -> Result<ImportSummary, String> {
 }
 
 /// 通过系统保存对话框把 `.swbg` 写到用户选的位置
-pub async fn export_to_disk(darken: u32, blur: u32, quality: u32) -> Result<(), String> {
+pub async fn export_to_disk(darken: u32, blur: u32) -> Result<(), String> {
     use crate::astrobox::psys_host_v4::dialog;
 
-    let bytes = export(darken, blur, quality)?;
+    let bytes = export(darken, blur)?;
 
     let session = dialog::save_file_start(dialog::FilterConfig {
         multiple: false,
@@ -421,7 +404,7 @@ mod tests {
     use super::*;
 
     /// 安卓端 `BackgroundPresetManager` 导出的是 camelCase 字段，两端字段名必须逐字对上。
-    /// 这个样张保留了老版本才会写的 `advancedSyncMode`，用来一起验证兼容性。
+    /// 这个样张保留了老版本才会写的 `quality` / `advancedSyncMode`，用来一起验证兼容性。
     #[test]
     fn parses_android_camel_case_manifest() {
         let json = r#"{
@@ -481,7 +464,7 @@ mod tests {
     }
 
     /// 导出的字段名必须与安卓 Gson 的 @SerializedName 一致，否则对方导不回去；
-    /// 且 `advancedSyncMode` 不能出现在包里（它是本机设置）
+    /// 且 `quality` / `advancedSyncMode` 都不能出现在包里（一个是死参数，一个是本机设置）
     #[test]
     fn exports_camel_case_fields() {
         let manifest = PresetManifest {
@@ -523,15 +506,17 @@ mod tests {
             "\"advanced_sync_mode\"",
             // 本机设置不进预设包，导出必须没有它
             "\"advancedSyncMode\"",
+            // 出图固定 RGB_565，这个参数没有意义，也不进预设包
+            "\"quality\"",
         ] {
             assert!(!json.contains(key), "导出不应包含字段 {}", key);
         }
     }
 
-    /// 早期版本（安卓端和插件端都算）导出的包里带 `advancedSyncMode`，
-    /// 现在虽然不写了，但读老包必须照常成功、直接忽略这个字段
+    /// 早期版本（安卓端和插件端都算）导出的包里带 `quality` 和 `advancedSyncMode`，
+    /// 现在虽然不写了，但读老包必须照常成功、直接忽略这两个字段
     #[test]
-    fn legacy_advanced_sync_mode_is_ignored() {
+    fn legacy_extra_settings_are_ignored() {
         let json = r#"{
             "formatVersion": 1,
             "globalSettings": {
@@ -541,15 +526,21 @@ mod tests {
                 "advancedSyncMode": false
             },
             "presets": [
-                { "weatherCode": "21", "imageFile": "images/21.png" }
+                {
+                    "weatherCode": "21",
+                    "imageFile": "images/21.png",
+                    "settings": { "darkenStrength": 12, "blurRadius": 3, "quality": 85 }
+                }
             ]
         }"#;
 
-        let manifest = parse_manifest(json.as_bytes()).expect("带 advancedSyncMode 的老包应能解析");
+        let manifest =
+            parse_manifest(json.as_bytes()).expect("带 quality / advancedSyncMode 的老包应能解析");
         assert_eq!(manifest.global_settings.darken_strength, 12);
         assert_eq!(manifest.global_settings.blur_radius, 3);
-        assert_eq!(manifest.global_settings.quality, 85);
         assert_eq!(manifest.presets.len(), 1);
+        assert_eq!(manifest.presets[0].settings.darken_strength, 12);
+        assert_eq!(manifest.presets[0].settings.blur_radius, 3);
     }
 
 }

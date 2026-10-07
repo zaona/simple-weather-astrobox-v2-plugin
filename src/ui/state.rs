@@ -37,8 +37,6 @@ pub struct UiState {
     pub bg_darken: u32,
     /// 模糊半径 0-100，对齐安卓 `bg_blur_radius`
     pub bg_blur: u32,
-    /// 对齐安卓 `bg_quality`。插件端出图固定 RGB_565，这个值只随预设包往来
-    pub bg_quality: u32,
     /// 对齐安卓 `advanced_sync_mode`：推送背景图前是否拉起快应用并握手。
     /// 属于本机设置，不进 `.swbg` 预设包
     pub bg_advanced_sync_mode: bool,
@@ -87,9 +85,6 @@ pub const ROW_MIN_COLUMN: u32 = 300;
 pub const ROW_COLUMN_GAP: u32 = 8;
 /// 窄于这个宽度就换紧凑档：页面留白更小、页签更紧，三个页签才放得下
 pub const COMPACT_MAX_WIDTH: u32 = 608;
-
-/// 与安卓端 `bg_quality` 的默认值一致
-pub const DEFAULT_BG_QUALITY: u32 = 85;
 
 impl UiState {
     /// 宽度未知（0）时按紧凑处理，首帧不会溢出
@@ -163,7 +158,6 @@ pub fn ui_state() -> &'static RwLock<UiState> {
             sync_card_backup: None,
             bg_darken: 0,
             bg_blur: 0,
-            bg_quality: DEFAULT_BG_QUALITY,
             bg_advanced_sync_mode: true,
             bg_pick_in_progress: false,
             bg_codes: Vec::new(),
@@ -197,14 +191,8 @@ struct StoredApiSettings {
     bg_darken: u32,
     #[serde(default)]
     bg_blur: u32,
-    #[serde(default = "default_bg_quality")]
-    bg_quality: u32,
     #[serde(default = "default_bool_true")]
     bg_advanced_sync_mode: bool,
-}
-
-fn default_bg_quality() -> u32 {
-    DEFAULT_BG_QUALITY
 }
 
 pub fn load_api_settings_once() {
@@ -244,7 +232,6 @@ pub fn load_api_settings_once() {
                 state.last_sync_location = stored.last_sync_location;
                 state.bg_darken = stored.bg_darken.min(100);
                 state.bg_blur = stored.bg_blur.min(100);
-                state.bg_quality = stored.bg_quality;
                 state.bg_advanced_sync_mode = stored.bg_advanced_sync_mode;
                 if state.selected_location.is_none() {
                     let first = state.recent_locations.first().cloned();
@@ -287,7 +274,6 @@ pub fn save_all_settings() -> Result<(), String> {
         last_sync_location: state.last_sync_location.clone(),
         bg_darken: state.bg_darken,
         bg_blur: state.bg_blur,
-        bg_quality: state.bg_quality,
         bg_advanced_sync_mode: state.bg_advanced_sync_mode,
     };
 

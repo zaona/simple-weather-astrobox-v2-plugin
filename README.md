@@ -68,17 +68,17 @@ api_settings.json          插件设置，含压暗与模糊
 ```text
 manifest.json
   formatVersion / appVersion / exportTimestamp / metadata
-  globalSettings: { darkenStrength, blurRadius, quality }
+  globalSettings: { darkenStrength, blurRadius }
   presets[]: { weatherCode, weatherLabel, imageFile, imageFormat,
-               originalFileName, settings: { darkenStrength, blurRadius, quality } }
+               originalFileName, settings: { darkenStrength, blurRadius } }
 images/{code}.{ext}       原始图片，不是成品图（条目名以包内实际命名为准）
 ```
 
 包里存的是原件加参数，所以来回导不会掉画质。导入时按码表顺序读 `images/`
 下的条目，编号取自条目文件名；`globalSettings` 会覆盖插件本地的压暗 / 模糊。
-`quality` 两端都只存不用（出图固定 RGB_565），会原样存下来、再次导出时带回；
-`advancedSyncMode` 属于本机设置，不进预设包，早期版本导出的包里带的这个字段
-导入时会被忽略，不影响解析。
+包里只放真正参与出图的参数（压暗 / 模糊）：`quality` 两端都只存不用（出图固定
+RGB_565），`advancedSyncMode` 属于本机设置，两者都不再写进预设包；早期版本导出的
+包里带过这两个字段，导入时会被忽略，不影响解析。
 
 解码支持的格式与安卓 `BitmapFactory` 的常用子集一致：PNG / JPEG / WebP
 （动图取第一帧）。打包里若有解码不了的原件，会在导入结果里计入「跳过」。
