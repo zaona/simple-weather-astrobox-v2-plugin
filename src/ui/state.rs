@@ -37,9 +37,9 @@ pub struct UiState {
     pub bg_darken: u32,
     /// 模糊半径 0-100，对齐安卓 `bg_blur_radius`
     pub bg_blur: u32,
-    /// 对齐安卓 `advanced_sync_mode`：推送背景图前是否拉起快应用并握手。
-    /// 属于本机设置，不进 `.swbg` 预设包
-    pub bg_advanced_sync_mode: bool,
+    /// 对齐安卓 `advanced_sync_mode`：与设备通讯前是否先拉起快应用并握手
+    /// （天气数据同步、背景图推送、清除背景图共用）。属于本机设置，不进 `.swbg` 预设包
+    pub advanced_sync_mode: bool,
     /// 选图对话框是否正在进行，挡住重复派发的选图事件
     pub bg_pick_in_progress: bool,
     /// 已保存自定义背景图的天气编号
@@ -158,7 +158,7 @@ pub fn ui_state() -> &'static RwLock<UiState> {
             sync_card_backup: None,
             bg_darken: 0,
             bg_blur: 0,
-            bg_advanced_sync_mode: true,
+            advanced_sync_mode: true,
             bg_pick_in_progress: false,
             bg_codes: Vec::new(),
             bg_guide: false,
@@ -191,8 +191,9 @@ struct StoredApiSettings {
     bg_darken: u32,
     #[serde(default)]
     bg_blur: u32,
-    #[serde(default = "default_bool_true")]
-    bg_advanced_sync_mode: bool,
+    // 早期版本用的是 bg_advanced_sync_mode，这里保留别名，旧设置文件仍能读回
+    #[serde(default = "default_bool_true", alias = "bg_advanced_sync_mode")]
+    advanced_sync_mode: bool,
 }
 
 pub fn load_api_settings_once() {
@@ -232,7 +233,7 @@ pub fn load_api_settings_once() {
                 state.last_sync_location = stored.last_sync_location;
                 state.bg_darken = stored.bg_darken.min(100);
                 state.bg_blur = stored.bg_blur.min(100);
-                state.bg_advanced_sync_mode = stored.bg_advanced_sync_mode;
+                state.advanced_sync_mode = stored.advanced_sync_mode;
                 if state.selected_location.is_none() {
                     let first = state.recent_locations.first().cloned();
                     if let Some(first) = first {
@@ -274,10 +275,18 @@ pub fn save_all_settings() -> Result<(), String> {
         last_sync_location: state.last_sync_location.clone(),
         bg_darken: state.bg_darken,
         bg_blur: state.bg_blur,
-        bg_advanced_sync_mode: state.bg_advanced_sync_mode,
+        advanced_sync_mode: state.advanced_sync_mode,
     };
 
     let content = serde_json::to_string_pretty(&stored).map_err(|e| e.to_string())?;
     std::fs::write(SETTINGS_FILE, content).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// 对齐安卓 `advanced_sync_mode`（默认开启）：与设备通讯前是否先拉起快应用并握手。
+pub fn advanced_sync_mode() -> bool {
+    ui_state()
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .advanced_sync_mode
 }

@@ -119,15 +119,32 @@ fn build_settings_tab(state: &UiState) -> ui::Element {
     build_settings_main(state)
 }
 
-fn build_settings_main(_state: &UiState) -> ui::Element {
+fn build_settings_main(state: &UiState) -> ui::Element {
     let mut root = ui::Element::new(ui::ElementType::Div, None)
         .flex()
         .flex_direction(ui::FlexDirection::Column)
         .width_full()
         .gap(8);
 
+    let common_title = build_section_title("通用");
+
+    let advanced_sync_card = build_settings_card(
+        icons::advanced_sync_svg(),
+        "高级同步模式",
+        Some("启用后先启动应用并握手"),
+        Some(build_switch(
+            state.advanced_sync_mode,
+            ADVANCED_SYNC_TOGGLE_EVENT,
+        )),
+        None,
+    )
+    .margin_bottom(10);
+
     let more_title = build_section_title("更多内容");
-    root = root.child(more_title);
+    root = root
+        .child(common_title)
+        .child(advanced_sync_card)
+        .child(more_title);
 
     let afd_card = build_settings_card(
         icons::afd_svg(),

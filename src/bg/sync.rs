@@ -273,6 +273,26 @@ pub async fn clear_all_on_watch() -> Result<(), String> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(addr.clone());
     clear_mailbox();
+
+    // 对齐安卓「清除自定义背景图」流程：高级同步模式开启时同样先拉起快应用并握手
+    if super::advanced_sync_mode() {
+        session::set_progress(Progress {
+            phase: Phase::Clearing,
+            message: "正在启动快应用并握手…".to_string(),
+            ..Progress::default()
+        });
+        crate::ui::build::rerender_main_ui();
+        if let Err(reason) = handshake_device(&addr).await {
+            if is_cancelled() {
+                release_transfer();
+                finish_progress(Phase::Cancelled, "传输已取消");
+                return Ok(());
+            }
+            // 与推送一致：握手只作探活，拿不到 ready 也继续尝试清除
+            tracing::warn!("{}，继续尝试清除背景图", reason);
+        }
+    }
+
     session::set_progress(Progress {
         phase: Phase::Clearing,
         message: "正在清除自定义背景图...".to_string(),
@@ -353,7 +373,7 @@ async fn run_sync(
             ..Progress::default()
         });
         crate::ui::build::rerender_main_ui();
-        match handshake(addr).await {
+        match handshake_device(addr).await {
             Ok(()) => tracing::info!("握手完成，开始传输背景图"),
             Err(reason) => {
                 if is_cancelled() {
@@ -511,8 +531,9 @@ async fn send_image(
     wait_for_image_saved(weather_code, ACK_TIMEOUT).await
 }
 
-/// 对齐安卓 `performWatchHandshake`：拉起快应用后最多 5 次 `start`，每次等 1 秒
-async fn handshake(addr: &str) -> Result<(), String> {
+/// 对齐安卓 `performWatchHandshake`：拉起快应用后最多 5 次 `start`，每次等 1 秒。
+/// 背景图推送与天气数据同步共用（见 [`super::handshake_device`]）。
+pub async fn handshake_device(addr: &str) -> Result<(), String> {
     clear_mailbox();
 
     let apps = thirdpartyapp::get_thirdparty_app_list(addr.to_string())

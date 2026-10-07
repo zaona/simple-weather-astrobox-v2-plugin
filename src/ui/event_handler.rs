@@ -5,7 +5,7 @@ use crate::astrobox::psys_host_v4::interconnect;
 use crate::astrobox::psys_host_v4::register;
 use crate::astrobox::psys_host_v4::thirdpartyapp;
 use crate::astrobox::psys_host_v4::ui;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use url::Url;
 
 pub const SEND_BUTTON_EVENT: &str = "send_button";
@@ -26,6 +26,7 @@ pub const BG_PICK_PREFIX: &str = "bg_pick:";
 pub const BG_DELETE_PREFIX: &str = "bg_delete:";
 pub const HOURLY_SYNC_TOGGLE_EVENT: &str = "hourly_sync_toggle";
 pub const ALERTS_SYNC_TOGGLE_EVENT: &str = "alerts_sync_toggle";
+pub const ADVANCED_SYNC_TOGGLE_EVENT: &str = "advanced_sync_toggle";
 pub const OPEN_HELP_DOC_EVENT: &str = "open_help_doc";
 pub const OPEN_QQ_GROUP_EVENT: &str = "open_qq_group";
 pub const OPEN_AFD_EVENT: &str = "open_afd";
@@ -195,6 +196,16 @@ pub async fn ui_event_processor(event_type: ui::Event, event_id: &str, event_pay
                     .write()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 state.sync_alerts_enabled = !state.sync_alerts_enabled;
+            }
+            let _ = crate::ui::state::save_all_settings();
+            crate::ui::build::rerender_main_ui();
+        }
+        ADVANCED_SYNC_TOGGLE_EVENT => {
+            {
+                let mut state = ui_state()
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.advanced_sync_mode = !state.advanced_sync_mode;
             }
             let _ = crate::ui::state::save_all_settings();
             crate::ui::build::rerender_main_ui();
@@ -1002,15 +1013,23 @@ async fn send_via_interconnect(generation: u64, data: &str) -> Result<(), SendEr
         return Err(fail(format!("register_interconnect_recv failed: {}", e)));
     }
 
-    set_send_stage(generation, "正在启动快应用…")?;
-    tracing::info!("launching quick app before send...");
-    ensure_quick_app_launched(&device_addr, pkg_name, "/index")
-        .await
-        .map_err(fail)?;
-    check_send_active(generation)?;
+    // 对齐安卓 `advanced_sync_mode`：开启时发送前先拉起快应用并握手，关掉就直接发
+    if advanced_sync_mode() {
+        set_send_stage(generation, "正在启动应用并握手…")?;
+        tracing::info!("launching quick app before send...");
+        ensure_quick_app_launched(&device_addr, pkg_name, "/index")
+            .await
+            .map_err(fail)?;
+        check_send_active(generation)?;
 
-    tracing::info!("waiting 2s for quick app to be ready...");
-    crate::sleep(Duration::from_secs(2)).await;
+        tracing::info!("handshaking with quick app...");
+        crate::bg::handshake_device(&device_addr)
+            .await
+            .map_err(|e| fail(format!("握手失败: {}", e)))?;
+        check_send_active(generation)?;
+    } else {
+        tracing::info!("advanced sync mode disabled, sending without launching quick app");
+    }
 
     set_send_stage(generation, "正在发送数据…")?;
     tracing::info!("sending weather data via interconnect");

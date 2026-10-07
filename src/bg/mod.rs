@@ -327,12 +327,17 @@ pub fn current_edit_settings() -> (u32, u32) {
     (state.bg_darken, state.bg_blur)
 }
 
-/// 对齐安卓 `advanced_sync_mode`：开启时推送前先拉起快应用并握手
+/// 对齐安卓 `advanced_sync_mode`：开启时与设备通讯前先拉起快应用并握手
 pub fn advanced_sync_mode() -> bool {
-    let state = crate::ui::state::ui_state()
-        .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    state.bg_advanced_sync_mode
+    crate::ui::state::advanced_sync_mode()
+}
+
+/// 对齐安卓 `performWatchHandshake`：拉起快应用后最多 5 次 `start`，每次等 `ready`。
+///
+/// 天气数据同步与背景图推送共用同一实现（安卓端两处都调 `performWatchHandshake`），
+/// 手环回执统一落进 [`sync`] 的回执邮箱。
+pub async fn handshake_device(addr: &str) -> Result<(), String> {
+    sync::handshake_device(addr).await
 }
 
 /// 拉起系统图片选择器，把选中的图作为该天气编号的原件并立即按当前滑块出图。
